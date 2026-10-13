@@ -1,0 +1,49 @@
+diff --git a/packages/SettingsProvider/src/com/android/providers/settings/DatabaseHelper.java b/packages/SettingsProvider/src/com/android/providers/settings/DatabaseHelper.java
+index 6dd1175..63db102 100644
+--- a/packages/SettingsProvider/src/com/android/providers/settings/DatabaseHelper.java
++++ b/packages/SettingsProvider/src/com/android/providers/settings/DatabaseHelper.java
+@@ -678,6 +678,14 @@ class DatabaseHelper extends SQLiteOpenHelper {
+         loadBooleanSetting(stmt, Settings.Secure.WIFI_NETWORKS_AVAILABLE_NOTIFICATION_ON,
+                 R.bool.def_networks_available_notification_on);
+ 
++        // Cooper (GT-S5830) retro-port ships no SetupWizard, which is the
++        // only in-tree writer of DEVICE_PROVISIONED. Without a provisioned
++        // default the keyguard mediator restricts input forever and the HOME
++        // key is silently swallowed (it is routed to an unlock verification
++        // that can never complete). Provision GMS-less builds by default;
++        // INSERT OR IGNORE keeps any existing value on upgrade.
++        loadSetting(stmt, Settings.Secure.DEVICE_PROVISIONED, 1);
++
+         String wifiWatchList = SystemProperties.get("ro.com.android.wifi-watchlist");
+         if (!TextUtils.isEmpty(wifiWatchList)) {
+             loadSetting(stmt, Settings.Secure.WIFI_WATCHDOG_WATCH_LIST, wifiWatchList);
+diff --git a/preloaded-classes b/preloaded-classes
+index 69c596c..f2ad317 100644
+--- a/preloaded-classes
++++ b/preloaded-classes
+@@ -776,25 +776,8 @@ com.google.android.net.GoogleHttpClient
+ com.google.android.net.NetworkStatsEntity
+ com.google.android.net.UrlRules
+ com.google.android.net.UrlRules$Rule
+-com.google.common.Config
+-com.google.common.Log
+-com.google.common.android.AndroidConfig
+-com.google.common.async.AsyncHttpRequestFactory$AsyncHttpRequestImpl
+-com.google.common.graphics.android.AndroidGraphics
+-com.google.common.io.BaseHttpConnectionFactory
+-com.google.common.io.IoUtil
+-com.google.common.io.android.AndroidHttpClient
+-com.google.common.io.android.AndroidHttpConnectionFactory
+-com.google.common.io.android.AndroidPersistentStore
+ com.google.common.io.protocol.ProtoBuf
+ com.google.common.io.protocol.ProtoBufType
+-com.google.common.util.text.TextUtil
+-com.google.masf.BlockingByteQueue
+-com.google.masf.MobileServiceMux
+-com.google.masf.protocol.PlainRequest
+-com.google.masf.services.EventLogService
+-com.google.masf.services.LogserviceMessageTypes
+-com.google.masf.services.resume.WindowResumeService
+ com.google.wireless.gdata.calendar.client.CalendarClient
+ com.google.wireless.gdata.client.GDataServiceClient
+ com.google.wireless.gdata.contacts.client.ContactsClient

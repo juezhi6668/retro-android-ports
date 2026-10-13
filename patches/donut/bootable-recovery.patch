@@ -1,0 +1,145 @@
+diff --git a/updater/install.c b/updater/install.c
+index c4f5e03..2c64f58 100644
+--- a/updater/install.c
++++ b/updater/install.c
+@@ -23,6 +23,7 @@
+ #include <sys/mount.h>
+ #include <sys/stat.h>
+ #include <sys/types.h>
++#include <sys/wait.h>
+ #include <unistd.h>
+ 
+ #include "cutils/misc.h"
+@@ -584,6 +585,47 @@ char* WriteRawImageFn(const char* name, State* state, int argc, Expr* argv[]) {
+     mtd_scan_partitions();
+     const MtdPartition* mtd = mtd_find_partition_by_name(partition);
+     if (mtd == NULL) {
++        // No MTD partition by that name (e.g. Samsung BML/stl devices like
++        // cooper, which have no MTD at all). If the target is a block device
++        // path, write the image to it directly, like later recoveries do.
++        if (strncmp(partition, "/dev/", 5) == 0) {
++            FILE* f = fopen(filename, "rb");
++            FILE* b = NULL;
++            bool success = true;
++            if (f == NULL) {
++                fprintf(stderr, "%s: can't open %s: %s\n",
++                        name, filename, strerror(errno));
++                result = strdup("");
++                goto done;
++            }
++            b = fopen(partition, "wb");
++            if (b == NULL) {
++                fprintf(stderr, "%s: can't open %s: %s\n",
++                        name, partition, strerror(errno));
++                fclose(f);
++                result = strdup("");
++                goto done;
++            }
++            char* buffer = malloc(BUFSIZ);
++            int read;
++            while (success && (read = fread(buffer, 1, BUFSIZ, f)) > 0) {
++                int wrote = fwrite(buffer, 1, read, b);
++                success = success && (wrote == read);
++                if (!success) {
++                    fprintf(stderr, "%s: raw write to %s failed: %s\n",
++                            name, partition, strerror(errno));
++                }
++            }
++            free(buffer);
++            fclose(f);
++            if (fflush(b) != 0) success = false;
++            if (fsync(fileno(b)) != 0) success = false;
++            fclose(b);
++            printf("%s %s (raw) from %s\n",
++                   success ? "wrote" : "failed to write", partition, filename);
++            result = success ? partition : strdup("");
++            goto done;
++        }
+         fprintf(stderr, "%s: no mtd partition named \"%s\"\n", name, partition);
+         result = strdup("");
+         goto done;
+@@ -639,6 +681,55 @@ done:
+     return result;
+ }
+ 
++// run_program(program, arg, ...)
++//
++// Runs the program at the given path with the given args (no shell). Returns
++// "t" if it exits with status 0, "" otherwise (so it can be asserted).
++// This is what later Android versions added for exactly this purpose; Donut
++// needs it on Samsung BML devices (cooper) to drive the BML-aware
++// /sbin/erase_image + /sbin/flash_image helpers, since raw writes to BML
++// partitions do not stick.
++char* RunProgramFn(const char* name, State* state, int argc, Expr* argv[]) {
++    if (argc < 1) {
++        return ErrorAbort(state, "%s() expects at least 1 arg, got %d",
++                          name, argc);
++    }
++    char** args = ReadVarArgs(state, argc, argv);
++    if (args == NULL) return NULL;
++
++    pid_t child = fork();
++    if (child == 0) {
++        execv(args[0], args);
++        fprintf(stderr, "run_program: execv of %s failed: %s\n",
++                args[0], strerror(errno));
++        _exit(127);
++    }
++    if (child < 0) {
++        fprintf(stderr, "run_program: fork failed: %s\n", strerror(errno));
++        free(args);
++        return strdup("");
++    }
++    int status;
++    if (waitpid(child, &status, 0) < 0) {
++        fprintf(stderr, "run_program: waitpid failed: %s\n", strerror(errno));
++        free(args);
++        return strdup("");
++    }
++    free(args);
++    if (WIFEXITED(status)) {
++        if (WEXITSTATUS(status) != 0) {
++            fprintf(stderr, "run_program: child exited with status %d\n",
++                    WEXITSTATUS(status));
++            return strdup("");
++        }
++    } else if (WIFSIGNALED(status)) {
++        fprintf(stderr, "run_program: child terminated by signal %d\n",
++                WTERMSIG(status));
++        return strdup("");
++    }
++    return strdup("t");
++}
++
+ // write_firmware_image(file, partition)
+ //
+ //    partition is "radio" or "hboot"
+@@ -779,6 +870,7 @@ void RegisterInstallFunctions() {
+     RegisterFunction("file_getprop", FileGetPropFn);
+     RegisterFunction("write_raw_image", WriteRawImageFn);
+     RegisterFunction("write_firmware_image", WriteFirmwareImageFn);
++    RegisterFunction("run_program", RunProgramFn);
+ 
+     RegisterFunction("apply_patch", ApplyPatchFn);
+     RegisterFunction("apply_patch_check", ApplyPatchFn);
+diff --git a/updater/updater.c b/updater/updater.c
+index 31d93ae..d2bb10b 100644
+--- a/updater/updater.c
++++ b/updater/updater.c
+@@ -34,9 +34,13 @@ int main(int argc, char** argv) {
+     }
+ 
+     char* version = argv[1];
+-    if ((version[0] != '1' && version[0] != '2') || version[1] != '\0') {
+-        // We support version "1" or "2".
+-        fprintf(stderr, "wrong updater binary API; expected 1 or 2, got %s\n",
++    // Donut originally spoke API 1/2. Modern recoveries (TWRP 2.x+) invoke
++    // the updater with API "3"; the pipe protocol for the classic edify
++    // functions implemented here is unchanged, so accept 3 as well.
++    if ((version[0] != '1' && version[0] != '2' && version[0] != '3') ||
++        version[1] != '\0') {
++        // We support version "1", "2" or "3".
++        fprintf(stderr, "wrong updater binary API; expected 1, 2 or 3, got %s\n",
+                 argv[1]);
+         return 2;
+     }

@@ -1,0 +1,15 @@
+diff --git a/tests/Android.mk b/tests/Android.mk
+index fe73983..138e73b 100644
+--- a/tests/Android.mk
++++ b/tests/Android.mk
+@@ -9,7 +9,9 @@ LOCAL_SRC_FILES := $(call all-java-files-under, src)
+ 
+ LOCAL_PACKAGE_NAME := CalendarProviderTests
+ 
+-LOCAL_JAVA_LIBRARIES := ext android.test.runner
++LOCAL_JAVA_LIBRARIES := ext android.test.runner googlelogin
++# ^ googlelogin is a pure-AOSP build stub (vendor/googlelogin) for the
++# proprietary GoogleLoginService API absent from AOSP. See vendor/googlelogin.
+ 
+ LOCAL_INSTRUMENTATION_FOR := CalendarProvider
+ 

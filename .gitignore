@@ -1,0 +1,13 @@
+# AOSP Donut checkout (11 GB, re-syncable) — never committed
+aosp-donut/
+
+# Build/package scratch
+out/
+work/
+
+# Device dump kept locally for reference
+reference/twrp-bml9.img
+
+# Python
+__pycache__/
+*.pyc

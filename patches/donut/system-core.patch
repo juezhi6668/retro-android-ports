@@ -1,0 +1,452 @@
+diff --git a/adb/services.c b/adb/services.c
+index 517da55..2f17a6e 100644
+--- a/adb/services.c
++++ b/adb/services.c
+@@ -214,44 +214,39 @@ static int create_service_thread(void (*func)(int, void *), void *cookie)
+ }
+ 
+ #if !ADB_HOST
+-static int create_subprocess(const char *cmd, const char *arg0, const char *arg1)
++/* Historical Donut used /dev/ptmx here, but pty allocation is fragile
++ * across kernels (grantpt/unlockpt/ptsname + devpts mount options), and
++ * bionic of this era has no socketpair() for the modern replacement. So use
++ * two plain pipes (split stdin/stdout); the poll loop below was adjusted to
++ * match. This is all a non-interactive shell needs. */
++static int create_subprocess(const char *cmd, const char *arg0,
++                             const char *arg1, int *write_fd_out)
+ {
+-    char *devname;
+-    int ptm;
++    int to_child[2] = { -1, -1 }, from_child[2] = { -1, -1 };
+     pid_t pid;
+ 
+-    ptm = unix_open("/dev/ptmx", O_RDWR); // | O_NOCTTY);
+-    if(ptm < 0){
+-        printf("[ cannot open /dev/ptmx - %s ]\n",strerror(errno));
+-        return -1;
+-    }
+-    fcntl(ptm, F_SETFD, FD_CLOEXEC);
+-
+-    if(grantpt(ptm) || unlockpt(ptm) ||
+-       ((devname = (char*) ptsname(ptm)) == 0)){
+-        printf("[ trouble with /dev/ptmx - %s ]\n", strerror(errno));
++    if (pipe(to_child) < 0 || pipe(from_child) < 0) {
++        printf("[ cannot create pipes - %s ]\n", strerror(errno));
++        if (to_child[0] >= 0) { adb_close(to_child[0]); adb_close(to_child[1]); }
++        if (from_child[0] >= 0) { adb_close(from_child[0]); adb_close(from_child[1]); }
+         return -1;
+     }
+ 
+     pid = fork();
+     if(pid < 0) {
+         printf("- fork failed: %s -\n", strerror(errno));
++        adb_close(to_child[0]); adb_close(to_child[1]);
++        adb_close(from_child[0]); adb_close(from_child[1]);
+         return -1;
+     }
+ 
+     if(pid == 0){
+-        int pts;
+-
+-        setsid();
++        dup2(to_child[0], 0);
++        dup2(from_child[1], 1);
++        dup2(from_child[1], 2);
+ 
+-        pts = unix_open(devname, O_RDWR);
+-        if(pts < 0) exit(-1);
+-
+-        dup2(pts, 0);
+-        dup2(pts, 1);
+-        dup2(pts, 2);
+-
+-        adb_close(ptm);
++        adb_close(to_child[0]); adb_close(to_child[1]);
++        adb_close(from_child[0]); adb_close(from_child[1]);
+ 
+         execl(cmd, cmd, arg0, arg1, NULL);
+         fprintf(stderr, "- exec '%s' failed: %s (%d) -\n",
+@@ -269,7 +264,10 @@ static int create_subprocess(const char *cmd, const char *arg0, const char *arg1
+            D("adb: unable to open %s\n", text);
+         }
+ 
+-        return ptm;
++        adb_close(to_child[0]);
++        adb_close(from_child[1]);
++        *write_fd_out = to_child[1];
++        return from_child[0];
+     }
+ }
+ #endif /* !ADB_HOST */
+@@ -286,10 +284,12 @@ static void shell_service(int s, void *command)
+     char    buffer[MAX_PAYLOAD];
+     char    buffer2[MAX_PAYLOAD];
+     struct pollfd ufds[2];
+-    int     fd, ret = 0;
++    int     fd, wfd, ret = 0;
+     unsigned count = 0;
+     char** args = (char **)command;
+-    fd = create_subprocess(SHELL_COMMAND, args[0], args[1]);
++    fd = create_subprocess(SHELL_COMMAND, args[0], args[1], &wfd);
++    if (fd < 0)
++        return;
+ 
+     while (1) {
+         while (count < sizeof(buffer)) {
+@@ -320,9 +320,9 @@ static void shell_service(int s, void *command)
+             }
+             if (ufds[1].revents & POLLIN) {
+                 ret = adb_read(s, buffer2, sizeof(buffer2));
+-                D("read s ret: %d\n", ret);
++                D("read s ret: %d, count: %d\n", ret, count);
+                 if (ret > 0)
+-                    adb_write(fd, buffer2, ret);
++                    adb_write(wfd, buffer2, ret);
+                 else
+                     break;
+             }
+@@ -346,6 +346,7 @@ static void shell_service(int s, void *command)
+     D("shell_service done\n");
+ 
+     adb_close(fd);
++    adb_close(wfd);
+     adb_close(s);
+ }
+ #endif // !ADB_HOST
+diff --git a/init/builtins.c b/init/builtins.c
+index 17df0af..03949f7 100644
+--- a/init/builtins.c
++++ b/init/builtins.c
+@@ -29,12 +29,18 @@
+ #include <stdlib.h>
+ #include <sys/mount.h>
+ #include <sys/resource.h>
++#include <sys/ioctl.h>
++
++extern int delete_module(const char *name, unsigned int flags);
+ 
+ #include "init.h"
+ #include "keywords.h"
+ #include "property_service.h"
+ #include "devices.h"
+ 
++/* property_set/_get live in property_service.c in this same binary
++ * (single-argument property_get reads the in-memory area directly). */
++
+ #include <private/android_filesystem_config.h>
+ 
+ void add_environment(const char *name, const char *value);
+@@ -173,10 +179,299 @@ int do_ifup(int nargs, char **args)
+ }
+ 
+ 
++#ifndef BLKGETSIZE64
++#define BLKGETSIZE64 _IOR(0x12, 114, size_t)
++#endif
++
++/* Samsung cooper (GT-S5830) FSR-STL bringup.
++ *
++ * The FSR-STL driver registers at insmod time but its stl block devices only
++ * materialize once userspace actively probes the underlying BML volumes,
++ * and — critically — only once the BML layer itself has settled (its own
++ * init completes well before its volumes are actually usable; insmodding
++ * fsr_stl.ko in `on init`, milliseconds after fsr.ko, yields a loaded but
++ * diskless driver). Recovery and Gingerbread both insmod later relative to
++ * BML readiness and then scan every volume, which is why this works there
++ * and never did here.
++ *
++ * So init.rc insmods only fsr.ko. Everything else happens here, in a forked
++ * child (the parent returns immediately so PID 1 can never wedge): wait for
++ * bml12/13/14 to appear, insmod fsr_stl.ko + sec_param.ko, actively probe
++ * every BML volume the way partition managers do, wait for the stl disks,
++ * mknod them (Donut processes uevent hotplug only once the main loop
++ * starts), mount stl12/13/14 and create the essential data directories.
++ */
++static int stl_wait_for(const char *vol, int tries)
++{
++    char line[256], name[64];
++    int maj, min, i;
++    unsigned long blocks;
++
++    for (i = 0; i < tries; i++) {
++        FILE *f = fopen("/proc/partitions", "r");
++        if (f) {
++            while (fgets(line, sizeof(line), f)) {
++                if (sscanf(line, "%d %d %lu %63s",
++                           &maj, &min, &blocks, name) != 4)
++                    continue;
++                if (!strcmp(name, vol)) {
++                    fclose(f);
++                    return (maj << 8) | (min & 0xff);
++                }
++            }
++            fclose(f);
++        }
++        usleep(100000);
++    }
++    return -1;
++}
++
++static int insmod_file(const char *path)
++{
++    /* Same helper do_insmod() uses, callable from anywhere in init. */
++    extern int init_module(void *, unsigned long, const char *);
++    char *module;
++    unsigned size;
++    FILE *f;
++    int ret = -1;
++
++    f = fopen(path, "r");
++    if (!f)
++        return -1;
++    fseek(f, 0, SEEK_END);
++    size = ftell(f);
++    fseek(f, 0, SEEK_SET);
++    module = malloc(size);
++    if (!module) {
++        fclose(f);
++        return -1;
++    }
++    if (fread(module, 1, size, f) != size) {
++        free(module);
++        fclose(f);
++        return -1;
++    }
++    fclose(f);
++    ret = init_module(module, size, "");
++    free(module);
++    return ret;
++}
++static void stl_fsr_child(void)
++{
++    static const char *bml_vols[] = {
++        "bml5", "bml6", "bml12", "bml13", "bml14", 0
++    };
++    static const char *want_vols[] = {
++        "stl12", "stl13", "stl14", 0
++    };
++    static const unsigned long probe_offs[] = {
++        1024, 4096, 16384, 65536, 1048576, 0
++    };
++    char path[64], line[256], name[64];
++    unsigned char buf[4096];
++    int i, tries, fd;
++    int done[3] = { 0, 0, 0 };
++    unsigned long long bytes;
++
++    ERROR("stlprobe: start (pid %d)\n", getpid());
++
++    /* Pin CPU to max for the whole bringup: every observed STL success on
++     * this SoC coincides with high CPU load (recovery startup, shell
++     * activity, bulk reads), while idle/low-clock boots never enumerate —
++     * the FSR discovery path is clock-sensitive. Restored at the end. */
++    write_file("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor",
++               "performance");
++
++    /* Ordinal 0: wait until the BML layer itself is usable. insmodding
++     * fsr_stl.ko milliseconds after fsr.ko (as init.rc does) yields a loaded
++     * but diskless driver; only once bml12/13/14 show up is the layer ready
++     * for the STL modules. */
++    if (stl_wait_for("bml12", 300) < 0 ||
++        stl_wait_for("bml13", 300) < 0 ||
++        stl_wait_for("bml14", 300) < 0) {
++        ERROR("stlprobe: bml volumes missing, giving up (pid %d)\n", getpid());
++        goto out;
++    }
++
++    /* Ordinal 1: load/probe/wait, resetting the whole stack between tries.
++     * The stl minors are stable on cooper (12/13/14 under major 138, as seen
++     * on every working boot), so in addition to polling /proc/partitions we
++     * mknod the nodes blind up front: if the driver creates volumes
++     * on-demand when opened (rather than at insmod), plain opens are what
++     * tickle it, and mount attempts double as the strongest tickle. */
++    for (tries = 0; tries < 12; tries++) {
++        FILE *f;
++        int maj, min, j, k, fd;
++        unsigned long blocks;
++
++        ERROR("stlprobe: load attempt %d (pid %d)\n", tries, getpid());
++        insmod_file("/lib/modules/fsr.ko");
++        sleep(4);
++        insmod_file("/lib/modules/fsr_stl.ko");
++        insmod_file("/lib/modules/sec_param.ko");
++
++        mknod("/dev/block/stl12", S_IFBLK | 0600, (138 << 8) | 12);
++        mknod("/dev/block/stl13", S_IFBLK | 0600, (138 << 8) | 13);
++        mknod("/dev/block/stl14", S_IFBLK | 0600, (138 << 8) | 14);
++
++        for (i = 0; bml_vols[i]; i++) {
++            snprintf(path, sizeof(path), "/dev/block/%s", bml_vols[i]);
++            fd = open(path, O_RDWR | O_NONBLOCK);
++            if (fd < 0)
++                continue;
++            ioctl(fd, BLKGETSIZE64, &bytes);
++            for (k = 0; probe_offs[k]; k++) {
++                if (lseek(fd, probe_offs[k], SEEK_SET) < 0)
++                    break;
++                if (read(fd, buf, sizeof(buf)) <= 0)
++                    break;
++            }
++            close(fd);
++        }
++
++        /* Give this load ~2s to enumerate, then check for the disks. Also
++         * attempt the mounts every round: if volumes materialize on open
++         * (rather than at insmod), mount attempts double as the trigger. */
++        for (k = 0; k < 20; k++) {
++            f = fopen("/proc/partitions", "r");
++            if (f) {
++                while (fgets(line, sizeof(line), f)) {
++                    if (sscanf(line, "%d %d %lu %63s",
++                               &maj, &min, &blocks, name) != 4)
++                        continue;
++                    for (j = 0; j < 3; j++) {
++                        if (done[j] || strcmp(name, want_vols[j]))
++                            continue;
++                        snprintf(path, sizeof(path), "/dev/block/%s", name);
++                        if (access(path, F_OK) == 0)
++                            done[j] = 1;
++                        else if (mknod(path, S_IFBLK | 0600,
++                                       (maj << 8) | (min & 0xff)) == 0)
++                            done[j] = 1;
++                    }
++                }
++                fclose(f);
++            }
++            if (done[0] && done[1] && done[2])
++                break;
++            mount("/dev/block/stl12", "/system", "ext4",
++                  MS_NODEV | MS_NOATIME | MS_NODIRATIME, "noauto_da_alloc");
++            mount("/dev/block/stl13", "/data", "ext4",
++                  MS_NOSUID | MS_NODEV | MS_NOATIME | MS_NODIRATIME,
++                  "noauto_da_alloc");
++            mount("/dev/block/stl14", "/cache", "ext4",
++                  MS_NOSUID | MS_NODEV | MS_NOATIME | MS_NODIRATIME,
++                  "noauto_da_alloc");
++            if (access("/system/build.prop", F_OK) == 0 &&
++                access("/data", F_OK) == 0 && access("/cache", F_OK) == 0) {
++                done[0] = done[1] = done[2] = 1;
++                break;
++            }
++            usleep(100000);
++        }
++        if (done[0] && done[1] && done[2])
++            break;
++        /* Diskless load: unload the whole stack (including fsr.ko, whose
++         * half-settled state otherwise poisons every later attempt) and try
++         * again after a breather, up to 8 attempts (~1.5 min total). */
++        ERROR("stlprobe: attempt %d diskless, cycling modules (pid %d)\n",
++              tries, getpid());
++        ERROR("stlprobe: rmmod rc=%d/%d/%d (pid %d)\n",
++              delete_module("sec_param", 0),
++              delete_module("fsr_stl", 0),
++              delete_module("fsr", 0), getpid());
++        sleep(5);
++    }
++
++    if (!(done[0] && done[1] && done[2])) {
++        ERROR("stlprobe: stl disks missing, giving up (pid %d)\n", getpid());
++        goto out;
++    }
++
++    /* Mount stl12/13/14 exactly like the (CM7-era) init.rc lines do. */
++    mount("/dev/block/stl12", "/system", "ext4",
++          MS_NODEV | MS_NOATIME | MS_NODIRATIME, "noauto_da_alloc");
++    mount("/dev/block/stl13", "/data", "ext4",
++          MS_NOSUID | MS_NODEV | MS_NOATIME | MS_NODIRATIME, "noauto_da_alloc");
++    mount("/dev/block/stl14", "/cache", "ext4",
++          MS_NOSUID | MS_NODEV | MS_NOATIME | MS_NODIRATIME, "noauto_da_alloc");
++
++    /* Essential data directories (mirrors init.rc; mkdir/chown/chmod are
++     * EEXIST-safe here, so already-correct entries are left alone). */
++    mkdir("/data/dalvik-cache", 0771);
++    chown("/data/dalvik-cache", 1000, 1000);
++    chmod("/data/dalvik-cache", 0771);
++    mkdir("/data/app", 0771);
++    chown("/data/app", 1000, 1000);
++    chmod("/data/app", 0771);
++    mkdir("/data/app-private", 0771);
++    chown("/data/app-private", 1000, 1000);
++    chmod("/data/app-private", 0771);
++    mkdir("/data/data", 0771);
++    chown("/data/data", 1000, 1000);
++    chmod("/data/data", 0771);
++    mkdir("/data/local", 0771);
++    chown("/data/local", 2000, 2000);
++    chmod("/data/local", 0771);
++    mkdir("/data/local/tmp", 0771);
++    chown("/data/local/tmp", 2000, 2000);
++    chmod("/data/local/tmp", 0771);
++    mkdir("/data/property", 0700);
++    chown("/data/property", 0, 0);
++    chmod("/data/property", 0700);
++    mkdir("/cache/recovery", 0770);
++    chown("/cache/recovery", 1000, 2001);
++    chmod("/cache/recovery", 0770);
++
++    /* Storage is up (or we gave up waiting). Either way the flag file tells
++     * the parent below that this child is done. */
++    ERROR("stlprobe: done (pid %d)\n", getpid());
++
++out:
++    /* Restore the ondemand governor the device tree configures. */
++    write_file("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor",
++               "ondemand");
++    fd = open("/dev/.stlprobe_done", O_WRONLY | O_CREAT | O_TRUNC, 0600);
++    if (fd >= 0)
++        close(fd);
++    _exit(0);
++}
++
++static void stl_fsr_probe(void)
++{
++    int i, fd;
++    pid_t pid = fork();
++
++    if (pid == 0) {
++        stl_fsr_child();
++        _exit(0);
++    }
++    if (pid < 0)
++        return;
++    /* Wait (bounded) for the child to finish storage bringup, then start
++     * the service classes here in init proper — so service bookkeeping
++     * (pids, restarts, sockets) is correct — instead of relying on property
++     * triggers that may fire before storage exists. If storage never comes
++     * up, this still runs (services needing /system will fail as before,
++     * leaving an adbd-only system for diagnosis). */
++    for (i = 0; i < 1500; i++) {
++        fd = open("/dev/.stlprobe_done", O_RDONLY);
++        if (fd >= 0) {
++            close(fd);
++            break;
++        }
++        usleep(100000);
++    }
++    {
++        char *args[] = { "class_start", "default" };
++        do_class_start(2, args);
++    }
++}
++
+ static int do_insmod_inner(int nargs, char **args, int opt_len)
+ {
+     char options[opt_len + 1];
+-    int i;
++    int i, ret;
+ 
+     options[0] = '\0';
+     if (nargs > 2) {
+@@ -187,7 +482,11 @@ static int do_insmod_inner(int nargs, char **args, int opt_len)
+         }
+     }
+ 
+-    return insmod(args[1], options);
++    ret = insmod(args[1], options);
++    ERROR("insmod %s r=%d\n", args[1], ret);
++    if (ret == 0 && strstr(args[1], "/fsr.ko"))
++        stl_fsr_probe();
++    return ret;
+ }
+ 
+ int do_insmod(int nargs, char **args)

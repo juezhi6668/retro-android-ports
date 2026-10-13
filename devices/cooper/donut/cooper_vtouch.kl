@@ -1,0 +1,9 @@
+# cooper_vtouch.kl - keymap for the vtouch single-touch proxy device.
+# The proxy passes through capacitive-key scancodes from sec_touchscreen;
+# BTN_TOUCH needs no entry (Donut consumes it by scancode, and BTN_TOUCH
+# is not a valid Donut keycode name - adding it would abort this file).
+# Flags use Donut-era syntax (VIRTUAL does not exist on Donut).
+key 139    MENU           WAKE
+key 158    BACK           WAKE
+key 102    HOME           WAKE
+key 217    SEARCH         WAKE

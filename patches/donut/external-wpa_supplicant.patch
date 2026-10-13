@@ -1,0 +1,39 @@
+diff --git a/common.h b/common.h
+index 8c560bc..0a4a565 100644
+--- a/common.h
++++ b/common.h
+@@ -268,11 +268,13 @@ enum { MSG_MSGDUMP, MSG_DEBUG, MSG_INFO, MSG_WARNING, MSG_ERROR };
+ 
+ void android_printf(int level, char *format, ...);
+ 
++/* Cooper (GT-S5830/ath6kl bring-up): pass ALL levels to logd, including
++ * MSG_DEBUG. Upstream Donut gates at MSG_INFO, which hides the entire
++ * driver conversation (scan ioctl paths log at DEBUG), leaving supplicant
++ * deaths undiagnosable. Visible via logcat tag "wpa_supplicant". */
+ #define wpa_printf(level, ...) \
+         do {                                            \
+-            if ((level) >= MSG_INFO) {                  \
+-                android_printf((level), __VA_ARGS__);   \
+-            }                                           \
++            android_printf((level), __VA_ARGS__);   \
+         } while (0)
+ 
+ #else /* ANDROID */
+diff --git a/driver_wext.c b/driver_wext.c
+index a2e4578..0cf14e4 100644
+--- a/driver_wext.c
++++ b/driver_wext.c
+@@ -22,6 +22,13 @@
+ #include <sys/ioctl.h>
+ #include <net/if_arp.h>
+ 
++/* Cooper (GT-S5830/ath6kl bring-up): route driver ioctl errors to logd.
++ * Upstream 0.5.11 reports them with perror() (stderr), which is /dev/null
++ * under init, so failing SIOCSIW* calls were completely silent. wpa_printf
++ * reaches logcat (tag "wpa_supplicant") via android_printf. */
++#undef perror
++#define perror(s) wpa_printf(MSG_DEBUG, "%s: %s", s, strerror(errno))
++
+ #include "wireless_copy.h"
+ #include "common.h"
+ #include "driver.h"

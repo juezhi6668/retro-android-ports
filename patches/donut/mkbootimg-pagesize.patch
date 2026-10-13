@@ -1,0 +1,31 @@
+--- a/mkbootimg/mkbootimg.c
++++ b/mkbootimg/mkbootimg.c
+@@ -64,6 +64,7 @@
+             "       [ --cmdline <kernel-commandline> ]\n"
+             "       [ --board <boardname> ]\n"
+             "       [ --base <address> ]\n"
++             "       [ --pagesize <size> ]\n"
+             "       -o|--output <filename>\n"
+             );
+     return 1;
+@@ -71,7 +72,7 @@
+ 
+ 
+ 
+-static unsigned char padding[2048] = { 0, };
++static unsigned char padding[8192] = { 0, };  /* cooper: pagesize 4096 */
+ 
+ int write_padding(int fd, unsigned pagesize, unsigned itemsize)
+ {
+@@ -140,7 +141,10 @@
+             second_fn = val;
+         } else if(!strcmp(arg, "--cmdline")) {
+             cmdline = val;
+-        } else if(!strcmp(arg, "--base")) {
++        } else if(!strcmp(arg, "--pagesize")) {
++            pagesize = strtoul(val, 0, 10);
++            hdr.page_size = pagesize;
++    } else if(!strcmp(arg, "--base")) {
+             unsigned base = strtoul(val, 0, 16);
+             hdr.kernel_addr =  base + 0x00008000;
+             hdr.ramdisk_addr = base + 0x01000000;

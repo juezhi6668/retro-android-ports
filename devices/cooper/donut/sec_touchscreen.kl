@@ -1,0 +1,7 @@
+# sec_touchscreen.kl - cooper capacitive keys.
+# Donut-era syntax: VIRTUAL does not exist on Donut (it aborts the
+# whole file), so these use WAKE like the other Donut keymaps.
+key 139    MENU           WAKE
+key 102    HOME           WAKE
+key 158    BACK           WAKE
+key 217    SEARCH         WAKE
