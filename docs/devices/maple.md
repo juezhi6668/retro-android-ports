@@ -239,3 +239,38 @@ Next actions (checkboxes for the log):
       dexopt. One reply-path write still EINVAL (non-fatal; suspect
       FREE_BUFFER/death layout — revisit).
 - [ ] Let first boot dexopt finish (~30-40 min), then check UI.
+      → did NOT finish: dalvik frozen at 15 jars across all later boots.
+- [x] TEST 16-19 (stall hunt): load pinned ~6.5, zero CPU anywhere, no
+      crashes. Ruled out: SELinux audit storm (permissive changed nothing),
+      storage errors (early kmsg clean, TWRP I/O fast), battery (100%).
+      Watcher evolution: loadavg → +proc snapshots (toolbox `ps` prints
+      nothing, `sort` SEGVs on this kernel — both avoided; pure sh +
+      cat/grep) → +meminfo/dmesg (`head`/`tail` output vanishes, `dmesg`
+      via pipe gives debuggerd SIGPIPE tombstones — write whole file
+      instead) → +wchan per-PID.
+- [x] TEST 20-21 (wchan): all userspace healthy-idle (binder reads, polls;
+      zygote + mediaserver + netd + bootanimation ALL present). NO
+      system_server in any sample — zygote never forks it. Load 6+ comes
+      from kernel threads, not a userspace spin. Stall is UPSTREAM of
+      system_server completion: PM/dexopt frozen because system_server
+      isn't finishing (not because dexopt is slow).
+- [x] TEST 22 (autowinch): `sbin/autowinch.sh` + service returns the phone
+      to TWRP 15 min after boot — no more manual button dances. Full
+      flash→boot→pull loop now runs unattended (except screen watch).
+- [ ] NEXT: find why zygote never forks system_server. Prime suspects:
+      (a) zygote stuck preloading (EGL/dlopen? needs fd/maps probe —
+      watcher has a zygote-fd section staged in test21+),
+      (b) MountService/volume wait (CHARQUIRKS: needs storage_list.xml +
+      nosdcard or MountService NPEs; vold disabled),
+      (c) reply-path EINVAL breaking a boot-critical RPC (addService with
+      objects? FREE_BUFFER/death layout still suspect).
+- [ ] PENDING (blocked on build-server access): formalize
+      `patches/kitkat/binder-uapi-64bit.patch` (bionic binder.h,
+      Parcel.h/Parcel.cpp, IPCThreadState.h/.cpp, servicemanager
+      binder.h/binder.c/service_manager.c — all edited live on server,
+      diffs not yet pulled) + `egl-use-software-renderer.patch`
+      (Loader.cpp) + REMOVE temp diag (smdbg/bdbg in service_manager.c
+      + binder.c, dump-boot-log/autowinch services). Then:
+      `TARGET_NO_KERNEL := true`, USB adb via configfs gadget
+      (CHARQUIRKS recipe), storage phase, kernel rebuild (logger +
+      alarm drivers).
