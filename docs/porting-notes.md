@@ -5,6 +5,8 @@ Samsung Galaxy Ace GT-S5830 (`cooper`, 2011, MSM7227) with a modern Arch host.
 Everything below applies to any attempt to build/run Donut on post-2009
 hardware. Device-specific notes live in `docs/devices/<codename>.md`
 (cooper: [`docs/devices/cooper.md`](devices/cooper.md)).
+For the KitKat-era delta (4.4.4 on newer hardware, e.g. maple), see
+[`docs/porting-notes-kitkat.md`](porting-notes-kitkat.md).
 
 ## Source & toolchain
 - **Cupcake is gone from AOSP.** `platform/manifest` has no `cupcake` /

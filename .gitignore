@@ -1,9 +1,11 @@
-# AOSP Donut checkout (11 GB, re-syncable) — never committed
+# AOSP checkouts (re-syncable, never committed)
 aosp-donut/
+aosp-kitkat/
 
 # Build/package scratch
 out/
 work/
+dumps/
 
 # Device dump kept locally for reference
 reference/twrp-bml9.img

@@ -9,12 +9,19 @@ AOSP="${AOSP_DIR:-$ROOT/aosp-donut}"
 
 case "${1:-}" in
     cooper) VENDOR=samsung; DEVICE=cooper ;;
+    maple) VENDOR=sony; DEVICE=maple ;;
     *)
-        echo "usage: $0 <codename> [version]   (known: cooper)"
+        echo "usage: $0 <codename> [version]   (known: cooper, maple)"
         exit 1
         ;;
 esac
-VERSION="${2:-donut}"
+VERSION="${2:-}"
+if [ -z "$VERSION" ]; then
+    case "$DEVICE" in
+        cooper) VERSION=donut ;;
+        maple) VERSION=kitkat ;;
+    esac
+fi
 
 SRC="$ROOT/devices/$DEVICE/$VERSION"
 DST="$AOSP/vendor/$VENDOR/$DEVICE"
@@ -22,5 +29,6 @@ DST="$AOSP/vendor/$VENDOR/$DEVICE"
 [ -d "$SRC" ] || { echo "no such device tree: $SRC" >&2; exit 1; }
 [ -d "$AOSP" ] || { echo "no AOSP checkout at $AOSP (set AOSP_DIR)" >&2; exit 1; }
 
+mkdir -p "$DST"
 rsync -a --delete "$SRC/" "$DST/"
 echo "synced $SRC -> $DST"

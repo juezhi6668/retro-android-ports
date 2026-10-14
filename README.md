@@ -27,9 +27,12 @@ true retro-port (candidate for more 2010–2012 hardware).
 | Device | Codename | Release | Status |
 | --- | --- | --- | --- |
 | Samsung Galaxy Ace GT-S5830/L/T | `cooper` | Donut 1.6 (DRD35) | Boots on-device, daily-driving basics OK (see device doc) |
+| Sony Xperia XZ Premium G8141/G8142 | `maple` | KitKat 4.4.4 (KTU84Q) | Skeleton only, not building/booting yet (see device doc) |
 
 Device docs (hardware specifics, verified fixes, open gaps) live in
-[`docs/devices/`](docs/devices/): [cooper](docs/devices/cooper.md).
+[`docs/devices/`](docs/devices/): [cooper](docs/devices/cooper.md),
+[maple](docs/devices/maple.md). KitKat playbook:
+[`docs/porting-notes-kitkat.md`](docs/porting-notes-kitkat.md).
 
 ## Repository layout
 
@@ -37,15 +40,17 @@ Device docs (hardware specifics, verified fixes, open gaps) live in
 devices/<codename>/<release>/   device tree, drop-in for aosp vendor/ path
 patches/<release>/              diffs this port makes to pristine AOSP
   files/                        new-file overlays (e.g. vendor/googlelogin)
-docs/porting-notes.md           generic playbook: ancient Android on newer hardware
+docs/porting-notes.md           generic playbook: ancient Android on newer hardware (Donut era)
+docs/porting-notes-kitkat.md    KitKat-era playbook delta (4.4.4 on newer hardware)
 docs/devices/<codename>.md      per-device porting log
-scripts/                        build + packaging + device-tree sync
+scripts/                        build + packaging + device-tree sync (+ dump-maple-stock.sh)
+containers/kitkat/              KitKat build-container recipe (Trusty + JDK 6, untested)
 tools/                          mkbootimg-cooper (patched Donut mkbootimg)
 reference/                      third-party trees/images kept for board params
 ```
 
-Not in git (gitignored): `aosp-donut/` (11 GB repo checkout), `out/`
-(flashable zip outputs), `work/` (packaging scratch).
+Not in git (gitignored): `aosp-donut/`, `aosp-kitkat/` (re-syncable
+checkouts), `out/` (flashable zip outputs), `work/` (packaging scratch).
 
 ## Building the cooper Donut port
 
@@ -66,17 +71,31 @@ Not in git (gitignored): `aosp-donut/` (11 GB repo checkout), `out/`
    + `run_program` shims, 51 toolbox symlinks as real symlinks).
    `scripts/build-cooper-donut-skeleton.py` builds the small preview zip.
 
+## Building the maple KitKat port (skeleton — no working build yet)
+
+1. **AOSP tree**: `repo init -u https://android.googlesource.com/platform/manifest -b android-4.4.4_r2`
+   then `repo sync` (→ `aosp-kitkat/`, or point `AOSP_DIR` elsewhere).
+2. **Ported tree**: `scripts/sync-device-tree.sh maple kitkat`
+   (→ `$AOSP_DIR/vendor/sony/maple`). `patches/kitkat/` is empty until the
+   first measured breakage — see [`patches/kitkat/README.md`](patches/kitkat/README.md).
+3. **Period container** (does not exist yet): Ubuntu 14.04 + JDK 6 era,
+   `lunch full_maple-eng && make -j$(nproc)`. See
+   [`docs/porting-notes-kitkat.md`](docs/porting-notes-kitkat.md) and the
+   blocker list in [`docs/devices/maple.md`](docs/devices/maple.md) — the
+   ARM32-userspace-on-MSM8998 spike comes before any build tuning.
+
 ## Roadmap
 
 - [x] Donut 1.6 boot on `cooper` with touchscreen + speaker audio
 - [ ] Finish cooper: USB adb shell, SD/vold, WiFi (ath6kl mid-bringup),
       camera sensor feed (needs kernel driver work)
-- [ ] Donut on a second device family (playbook extraction continues)
+- [x] Generalize the device layout/scripts for `devices/<codename>/`
+      (`cooper/donut` + `maple/kitkat` skeletons share one sync script)
+- [ ] KitKat 4.4.4 on `maple`: build container → ARM32-on-MSM8998 spike →
+      first `lunch full_maple-eng` (see `docs/devices/maple.md` blockers)
 - [ ] Other ancient releases on newer hardware — Eclair/Froyo next;
       Cupcake is impossible (source gone), documented learning still
       applies to custom 1.5 builds if a tree surfaces
-- [ ] Generalize the device layout/scripts for `devices/<codename>/`
-      as new ports land
 
 ## Licensing & credits
 
@@ -87,3 +106,6 @@ Not in git (gitignored): `aosp-donut/` (11 GB repo checkout), `out/`
 - Vendor blobs (Samsung kernel/modules/firmware, Broadcom Atheros firmware)
   are retained for personal device servicing only; keep this repo private
   and do not redistribute.
+- `android_device_sony_maple` (sony-msm8998, `ten`) + `yoshino-common`
+  (`BoardConfigPlatform.mk`, msm8998) — reference only, Apache 2.0; board
+  params distilled into `devices/maple/kitkat/`, no blobs committed.

@@ -1,0 +1,23 @@
+#
+# system.prop for maple (KitKat skeleton — TODO verify each entry live)
+#
+# Display density: MEASURED 410 on the running LineageOS 20
+# (dumps/maple-stock-*: `ro.sf.lcd_density=410`, dumpsys Built-in Screen
+# 1080x1920 @ 403 dpi physical). Sony renders 1080p normally despite the
+# 4K panel — KitKat starts at the same 410 (cf. cooper's 120-vs-160 lesson:
+# measure, don't guess).
+ro.sf.lcd_density=410
+qemu.sf.lcd_density=410
+
+# Wifi interface (yoshino BCM43xx; confirm on stock: wlan0)
+wifi.interface=wlan0
+
+# Model/brand (must match full_maple.mk + OTA asserts)
+ro.product.model=G8141
+ro.product.brand=sony
+ro.product.manufacturer=Sony
+ro.product.device=maple
+
+# TODO: ril_class / mobiledata.interfaces once the MSM8998 RIL path is
+# evaluated (no cellular on first bringup — cf. cooper rild-removed).
+# TODO: camera media profiles once the HAL lands.

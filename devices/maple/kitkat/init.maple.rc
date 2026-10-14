@@ -1,0 +1,92 @@
+# init.maple.rc — KitKat skeleton for Sony maple (MSM8998, GPT/ext4)
+# SKELETON: mounts + early USB only. Imported from init.rc via
+# `import /init.maple.rc` (TARGET_PROVIDES_INIT_RC=true ships our init.rc;
+# the KitKat init.rc itself is still TODO — start from aosp-kitkat
+# system/core/rootdir/init.rc once synced, the way cooper's init.rc was
+# derived from Donut's).
+# Block paths: /dev/block/bootdevice/by-name/* (from TWRP
+# fstab_maple.recovery). VERIFY on stock before first boot.
+
+on early-init
+    # MSM8998 USB gadget (DWC3, a800000.dwc3) — KitKat-era functionfs/adb
+    # path TBD against the 4.4 kernel; android_usb fallback kept so adb has
+    # a chance on first bringup. Nonexistent-path writes fail silently.
+    write /sys/class/android_usb/android0/enable 0
+    write /sys/class/android_usb/android0/idVendor 0FCE
+    write /sys/class/android_usb/android0/idProduct 41DB
+    write /sys/class/android_usb/android0/functions adb
+    write /sys/class/android_usb/android0/iManufacturer Sony
+    write /sys/class/android_usb/android0/iProduct G8141
+    write /sys/class/android_usb/android0/enable 1
+
+on init
+    # PERMISSIVE SELinux for bringup: KitKat's policy mismatches the 4.4
+    # kernel everywhere; enforcing mode buries the boot in denials (and a
+    # suspect audit-backlog D-state storm pinned load at 6+ with zero CPU
+    # for 11+ min). Policy audit is a later project; cooper precedent says
+    # get the boot green first. TODO: re-enable + audit.
+    setenforce 0
+    # Coldboot MUST finish before mounts: by-name symlinks + block nodes
+    # appear during ueventd coldboot, and do_mount fails SILENTLY (no kmsg)
+    # if the node isn't there yet. Stock KitKat has no wait here; maple
+    # (hundreds of uevents on yoshino) needs it.
+    wait_for_coldboot_done
+
+# NOTE: each mount is its OWN `on init` action. A failing init command
+# aborts its action SILENTLY — one bad mount used to kill persist + all
+# mkdirs below it. Independent stanzas isolate failures (proven: cache
+# mount failure hid everything after it in TEST 6).
+# GPT/ext4 mounts by RAW node (sde/sda numbers from TWRP by-name dump
+# 2026-10-13: stable GPT partition numbers, no symlink timing involved):
+# system->sde46, cache->sda5, userdata->sda15, persist->sda4.
+# KitKat mount syntax: space-separated FLAGS, ONE trailing options arg.
+on init
+    mount ext4 /dev/block/sde46 /system ro wait
+
+on init
+    mount ext4 /dev/block/sda15 /data nosuid nodev noatime nodiratime wait noauto_da_alloc,barrier=0
+
+on init
+    mount ext4 /dev/block/sda5 /cache nosuid nodev noatime nodiratime wait noauto_da_alloc,barrier=0
+
+on init
+    mount ext4 /dev/block/sda4 /persist nosuid nodev wait barrier=1
+
+on init
+
+    mkdir /data/misc 01771 system misc
+    mkdir /data/misc/wifi 0770 wifi wifi
+    mkdir /data/misc/log 0775 system log
+    mkdir /data/local/tmp 0771 shell shell
+    mkdir /data/dalvik-cache 0771 system system
+    # PRODUCT_COPY_FILES lands 644; the diag scripts must exec.
+    chmod 0755 /system/bin/dump-boot-log.sh
+    chmod 0755 /sbin/autowinch.sh
+
+    # TODO: modem/firmware mounts (vfat /firmware, /bt_firmware) once the
+    # corresponding daemons exist. NOT mounted until needed — see
+    # fstab.maple + docs/devices/maple.md blocker 5.
+    # TODO: 32-bit-userspace cgroup/lowmemorykiller tuning for 4 GB RAM
+    # (cooper's 6-slot adj/minfree values do NOT carry over; re-derive from
+    # KitKat ActivityManager defaults + measured pressure).
+
+on boot
+    # Safety net: (re)start adbd now that init is up. No-op if running.
+    start adbd
+    start bootlog
+    # DIAG: auto-return to TWRP after 15 min (no adb to recover a stuck
+    # boot remotely). Remove once adb works.
+    start autowinch
+
+# DIAG (test 7): no USB/adb yet (DWC3 needs functionfs bringup — later),
+# so capture logs to files for TWRP-side pull. Remove once adb works.
+# NOT oneshot: the script loops forever snapshotting ps/loadavg/dalvik.
+service bootlog /system/bin/dump-boot-log.sh
+    user root
+    disabled
+
+# DIAG: auto-return to TWRP 15 min after boot. Remove once adb works.
+service autowinch /sbin/autowinch.sh
+    user root
+    disabled
+    oneshot
