@@ -6,7 +6,8 @@
 # yoshino's lineage vendor is its own image (the oem partition), take it from the zip or pass
 # a dump of the phone's oem partition, which kitkat never touched.
 # usage: extract-lineage.sh <lineage zip | system.img> <out dir> [vendor.img | vendor dir]
-# needs unzip, brotli, debugfs (e2fsprogs) and python3
+# needs unzip, brotli, debugfs (e2fsprogs) and python3, plus unsquashfs for squashfs
+# images (later unofficial maple builds) or fsck.erofs for erofs
 set -e
 IN=$(realpath "$1")
 OUT=$(realpath -m "$2")
@@ -46,12 +47,17 @@ unpack_img() {
         echo "$1 is sparse, run simg2img on it first" >&2
         exit 1
     fi
+    if [ "$(od -An -c -N4 "$1" | tr -d ' ')" = "hsqs" ]; then
+        unsquashfs -q -n -no-xattrs -d "$2" "$1" >/dev/null
+        return
+    fi
     mkdir -p "$2"
     if [ "$(od -An -tx4 -j1024 -N4 "$1" | tr -d ' ')" = "e0f5e1e2" ]; then
         fsck.erofs --extract="$2" "$1"
         return
     fi
-    debugfs -R "rdump / $2" "$1" 2>/dev/null
+    # -c skips the bitmaps, which android's image tools leave in a state debugfs refuses
+    debugfs -c -R "rdump / $2" "$1" 2>/dev/null
 }
 
 sysimg=$IN
@@ -94,7 +100,7 @@ for a in "$OUT"/system/apex/*.apex "$OUT"/system/apex/*.capex; do
     fi
     [ -f "$d/apex_payload.img" ] || continue
     mkdir -p "$d/root"
-    debugfs -R "rdump / $d/root" "$d/apex_payload.img" 2>/dev/null || continue
+    debugfs -c -R "rdump / $d/root" "$d/apex_payload.img" 2>/dev/null || continue
     if [ -d "$d/root/lib" ]; then
         find "$d/root/lib" -maxdepth 2 -name '*.so' -type f -exec cp -n -t "$OUT/apexlib" {} +
     fi
