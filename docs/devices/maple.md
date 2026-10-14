@@ -274,3 +274,61 @@ Next actions (checkboxes for the log):
       `TARGET_NO_KERNEL := true`, USB adb via configfs gadget
       (CHARQUIRKS recipe), storage phase, kernel rebuild (logger +
       alarm drivers).
+- [ ] TEST 23: why it wedges after the 15 boot jars (15 is the whole kitkat
+      `BOOTCLASSPATH`, zygote dexopts those, app dexopt never starts)
+      - bootanimation only starts from surfaceflinger's `init()`, right
+        before it registers with servicemanager. so sf got through init and
+        the wedge is a lost binder reply (the reply-path EINVAL above).
+        the kernel stops parsing a write at the first bad command and drops
+        the rest, so any 32-bit leftover (BC_FREE_BUFFER, death
+        notifications, BC_*_DONE) can eat a following BC_REPLY and leave
+        the caller asleep forever (S state, zero cpu)
+      - test 20-21 saw no system_server at all, so it dies or stalls before
+        the healthd and vold waits below can matter. those still have to be
+        fixed for it to get further, the next capture shows whether
+        system_server appears once binder is fixed
+      - fix: `bionic-binder-uapi-64bit.patch` +
+        `frameworks-native-binder-64bit.patch`, which cover every command
+        and also the `continueWrite` objects memcpy (was copying half)
+      - healthd back on: BatteryService throws without `batterypropreg`,
+        which aborts system_server's core service block before window
+        manager starts
+      - vold back on: system_server blocks forever in
+        `MountService.waitForAsecScan()` without it
+      - `dump-boot-log.sh` adds `service list`, per thread wchan for sf,
+        system_server and servicemanager, and a sysrq-w (d-state stacks)
+        into kmsg about 3 minutes in
+- [ ] storage (untested, set up before ui so apps don't start without it)
+      - internal is emulated, `/data/media` through the `sdcard` fuse daemon
+        at `/mnt/shell/emulated`, exposed as `/storage/emulated/legacy` with
+        the `/sdcard` links (the nexus 5 kitkat layout). overlay
+        `storage_list.xml` marks it emulated, which makes it primary
+      - `sdcard` is `class main`, `late_start` never fires without `mount_all`
+      - microsd is vold's `sdcard1`, devpath `/devices/soc/c0a4900.sdhci/mmc_host`
+        from lineage's yoshino fstab, without the trailing `*` (kitkat vold
+        prefix matches). vold mounts on `/mnt/media_rw/sdcard1` and starts
+        `fuse_sdcard1` for `/storage/sdcard1`
+      - kitkat vold is vfat only, exfat cards show as unmountable
+- [ ] gpu (untested, ported from [pdx203-jellybean](https://github.com/chardidathing/pdx203-jellybean)
+      by @chardidathing, where the same split runs 4.2 at ~60fps on an adreno 650)
+      - no kitkat-era adreno driver knows the 540, and lineage's can't load into kitkat
+        processes. so kitkat runs the emulator's gl libs, which stream gl calls over the
+        `glrenderd` abstract socket to `glrenderd`, the emulator's host renderer built as a
+        32-bit daemon in a chroot of lineage 20's own system and vendor. it draws on adreno,
+        reads the composed frame back and pans fb0
+      - build: apply the four `*glrenderd*` patches, then
+        `tools/glrenderd/build.sh $AOSP_DIR <android-ndk-r21e>`,
+        `tools/glrenderd/extract-lineage.sh <lineage 20 maple zip> <sysroot> [oem.img]`,
+        `tools/glrenderd/stage.py <sysroot> tools/glrenderd/out $AOSP_DIR/vendor/sony/maple-glr`.
+        the oem partition is lineage's vendor and kitkat never touched it, so a dump of it
+        from twrp works if the zip is gone
+      - without the staged chroot, or with glrenderd down, gralloc and egl fall back to
+        `gralloc.default` and libagl. hwui needs gles2, so apps will likely crash there
+      - the protocol is unchanged from 4.2 (the renderControl and gl specs are identical),
+        glrenderd is built against kitkat's sdk anyway
+- [ ] touch and buttons (untested)
+      - clearpad doesn't finish probing until `post_probe_start` is written (lineage's
+        init.yoshino.rc does the same), done in post-fs-data
+      - `clearpad.idc` so it's a touchscreen, `gpio-keys.kl` for volume and the two stage
+        camera key (528 focus, 766 camera), power is qpnp_pon through Generic.kl
+      - nav bar on (`config_showNavigationBar`), the phone has no hardware home or back

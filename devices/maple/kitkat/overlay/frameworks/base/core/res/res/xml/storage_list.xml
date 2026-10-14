@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ported from pdx203-jellybean by @chardidathing, https://github.com/chardidathing/pdx203-jellybean -->
+<!-- internal storage is /data/media through the sdcard fuse daemon, the microsd is vold's sdcard1 -->
+<StorageList xmlns:android="http://schemas.android.com/apk/res/android">
+    <storage android:storageDescription="@string/storage_internal"
+             android:emulated="true"
+             android:mtpReserve="100" />
+    <!-- kitkat vold only mounts vfat, exfat cards (most 64gb and up) show as unmountable -->
+    <storage android:mountPoint="/storage/sdcard1"
+             android:storageDescription="@string/storage_sd_card"
+             android:removable="true"
+             android:maxFileSize="4294967295" />
+</StorageList>

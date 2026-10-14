@@ -70,6 +70,31 @@ on init
     # (cooper's 6-slot adj/minfree values do NOT carry over; re-derive from
     # KitKat ActivityManager defaults + measured pressure).
 
+on init
+    mkdir /mnt/shell/emulated 0700 shell shell
+    mkdir /storage/emulated 0555 root root
+    mkdir /mnt/media_rw/sdcard1 0700 media_rw media_rw
+    mkdir /storage/sdcard1 0700 root root
+    export EXTERNAL_STORAGE /storage/emulated/legacy
+    export EMULATED_STORAGE_SOURCE /mnt/shell/emulated
+    export EMULATED_STORAGE_TARGET /storage/emulated
+    export SECONDARY_STORAGE /storage/sdcard1
+    symlink /storage/emulated/legacy /sdcard
+    symlink /storage/emulated/legacy /mnt/sdcard
+    symlink /storage/emulated/legacy /storage/sdcard0
+    symlink /mnt/shell/emulated/0 /storage/emulated/legacy
+
+on post-fs-data
+    mkdir /data/media 0770 media_rw media_rw
+
+    # the kernel resolves this from the requester's root, glrenderd's chroot has the a540 firmware there
+    write /sys/module/firmware_class/parameters/path /vendor/firmware
+    # before surfaceflinger (class core, on boot), which waits for its socket
+    start glrenderd
+
+    # the clearpad driver doesn't finish probing (no touch events) until this, lineage does the same
+    write /sys/devices/virtual/input/clearpad/post_probe_start 1
+
 on boot
     # Safety net: (re)start adbd now that init is up. No-op if running.
     start adbd
@@ -90,3 +115,18 @@ service autowinch /sbin/autowinch.sh
     user root
     disabled
     oneshot
+
+# class main not late_start, late_start only fires from mount_all and the mounts here are by hand
+service sdcard /system/bin/sdcard -u 1023 -g 1023 -l /data/media /mnt/shell/emulated
+    class main
+
+# vold starts this by name (fuse_<label>) once it has mounted the card on /mnt/media_rw/sdcard1
+service fuse_sdcard1 /system/bin/sdcard -u 1023 -g 1023 -w 1023 -d /mnt/media_rw/sdcard1 /storage/sdcard1
+    class main
+    disabled
+
+# adreno renderer for the whole ui, surfaceflinger and apps talk to it over the glrenderd socket.
+# stats and crashes land in dmesg
+service glrenderd /system/bin/sh /sbin/glrenderd.sh
+    class core
+    disabled

@@ -428,19 +428,17 @@ service ueventd /sbin/ueventd
     critical
     seclabel u:r:ueventd:s0
 
-# RETRO-PORT maple: healthd DISABLED for bringup — exits 4x (binder
-# WRITE_READ EINVAL on first IPC against the 4.4 kernel) and its `critical`
-# flag forces a recovery reboot, hiding all later boot stages. Battery/
-# charger UI comes back with the healthd/binder investigation.
-#service healthd /sbin/healthd
-#    class core
-#    critical
-#    seclabel u:r:healthd:s0
+# BatteryService throws without healthd's batterypropreg, which skips the rest of
+# system_server's core services (window manager included)
+service healthd /sbin/healthd
+    class core
+    critical
+    seclabel u:r:healthd:s0
 
-#service healthd-charger /sbin/healthd -n
-#    class charger
-#    critical
-#    seclabel u:r:healthd:s0
+service healthd-charger /sbin/healthd -n
+    class charger
+    critical
+    seclabel u:r:healthd:s0
 
 on property:selinux.reload_policy=1
     restart ueventd
@@ -478,14 +476,11 @@ service servicemanager /system/bin/servicemanager
     onrestart restart surfaceflinger
     onrestart restart drm
 
-# RETRO-PORT maple: vold DISABLED for bringup (cooper precedent —
-# it crash-loops / holds boot on foreign filesystems; Lineage-FBE userdata
-# parks vold in decrypt-wait and `on boot` never fires). Re-enable for
-# SD/storage once UI boots.
-#service vold /system/bin/vold
-#    class core
-#    socket vold stream 0660 root mount
-#    ioprio be 2
+# system_server waits forever in MountService.waitForAsecScan() without vold
+service vold /system/bin/vold
+    class core
+    socket vold stream 0660 root mount
+    ioprio be 2
 
 service netd /system/bin/netd
     class main

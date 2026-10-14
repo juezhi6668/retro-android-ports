@@ -21,3 +21,6 @@ ro.product.device=maple
 # TODO: ril_class / mobiledata.interfaces once the MSM8998 RIL path is
 # evaluated (no cellular on first bringup — cf. cooper rild-removed).
 # TODO: camera media profiles once the HAL lands.
+
+# gles 2.0 through glrenderd, apps that check this refuse to run below it
+ro.opengles.version=131072

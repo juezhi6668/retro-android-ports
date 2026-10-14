@@ -1,0 +1,77 @@
+ported from pdx203-jellybean by @chardidathing, https://github.com/chardidathing/pdx203-jellybean
+
+diff --git a/emulator/opengl/host/libs/libOpenglRender/FBConfig.cpp b/emulator/opengl/host/libs/libOpenglRender/FBConfig.cpp
+index 089f1da..ea88637 100644
+--- a/emulator/opengl/host/libs/libOpenglRender/FBConfig.cpp
++++ b/emulator/opengl/host/libs/libOpenglRender/FBConfig.cpp
+@@ -233,9 +233,37 @@ int FBConfig::chooseConfig(FrameBuffer *fb, EGLint * attribs, uint32_t * configs
+     return nVerifiedCfgs;
+ }
+ 
++// gles only lets glCopyTexImage2D take channels the read buffer has, so an opaque
++// (no alpha) pbuffer can never be copied into an rgba color buffer. desktop gl didn't
++// care, adreno does, and opaque windows like the wallpaper came out empty. contexts and
++// pbuffers both use the matching config with 8 bits of alpha (they have to agree for
++// eglMakeCurrent), the guest still sees the original config's attributes
++static EGLConfig withAlpha(EGLDisplay dpy, EGLConfig config)
++{
++    EGLint alpha = 0;
++    s_egl.eglGetConfigAttrib(dpy, config, EGL_ALPHA_SIZE, &alpha);
++    if (alpha > 0)
++        return config;
++
++    EGLint attribs[] = {
++        EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_ALPHA_SIZE, 8,
++        EGL_DEPTH_SIZE, 0, EGL_STENCIL_SIZE, 0, EGL_RENDERABLE_TYPE, 0,
++        EGL_SURFACE_TYPE, EGL_PBUFFER_BIT, EGL_NONE
++    };
++    s_egl.eglGetConfigAttrib(dpy, config, EGL_DEPTH_SIZE, &attribs[9]);
++    s_egl.eglGetConfigAttrib(dpy, config, EGL_STENCIL_SIZE, &attribs[11]);
++    s_egl.eglGetConfigAttrib(dpy, config, EGL_RENDERABLE_TYPE, &attribs[13]);
++
++    EGLConfig withAlpha;
++    EGLint n = 0;
++    if (s_egl.eglChooseConfig(dpy, attribs, &withAlpha, 1, &n) && n > 0)
++        return withAlpha;
++    return config;
++}
++
+ FBConfig::FBConfig(EGLDisplay p_eglDpy, EGLConfig p_eglCfg)
+ {
+-    m_eglConfig = p_eglCfg;
++    m_eglConfig = withAlpha(p_eglDpy, p_eglCfg);
+     m_attribValues = new GLint[s_numConfigAttribs];
+     for (int i=0; i<s_numConfigAttribs; i++) {
+         m_attribValues[i] = 0;
+diff --git a/emulator/opengl/host/libs/libOpenglRender/FrameBuffer.cpp b/emulator/opengl/host/libs/libOpenglRender/FrameBuffer.cpp
+index 2c9e8c5..b492910 100644
+--- a/emulator/opengl/host/libs/libOpenglRender/FrameBuffer.cpp
++++ b/emulator/opengl/host/libs/libOpenglRender/FrameBuffer.cpp
+@@ -23,6 +23,9 @@
+ #include <stdio.h>
+ #include "TimeUtils.h"
+ 
++// glrenderd reads this for its per-frame timing
++long long s_readbackMs;
++
+ FrameBuffer *FrameBuffer::s_theFrameBuffer = NULL;
+ HandleType FrameBuffer::s_nextHandle = 0;
+ 
+@@ -807,8 +810,15 @@ bool FrameBuffer::post(HandleType p_colorbuffer, bool needLock)
+ 
+         m_lastPostedColorBuffer = p_colorbuffer;
+         if (!m_subWin) {
+-            // no subwindow created for the FB output
+-            // cannot post the colorbuffer
++            // headless (glrenderd), no window to draw into, hand the pixels straight to the callback
++            if (m_onPost) {
++                long long t0 = GetCurrentTimeMS();
++                (*c).second.cb->readback(m_fbImage);
++                s_readbackMs += GetCurrentTimeMS() - t0;
++                m_onPost(m_onPostContext, m_width, m_height, -1,
++                        GL_RGBA, GL_UNSIGNED_BYTE, m_fbImage);
++                ret = true;
++            }
+             if (needLock) m_lock.unlock();
+             return ret;
+         }

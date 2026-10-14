@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ported from pdx203-jellybean by @chardidathing, https://github.com/chardidathing/pdx203-jellybean -->
+<resources>
+    <!-- no home, back or recents keys on the xz premium, kitkat needs the on screen ones -->
+    <bool name="config_showNavigationBar">true</bool>
+</resources>

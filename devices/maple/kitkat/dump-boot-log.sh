@@ -7,10 +7,18 @@
 # that runs this must NOT be oneshot. Remove once adb works.
 dmesg > /data/misc/dmesg-boot.txt
 logcat -v threadtime -f /data/misc/logcat-boot.txt 2>/dev/null &
+n=0
 while true; do
+    n=$((n + 1))
     echo "=== $(date) ===" >> /data/misc/watch.txt
     cat /proc/loadavg >> /data/misc/watch.txt
-    head -8 /proc/meminfo >> /data/misc/watch.txt
+    cat /proc/meminfo >> /data/misc/watch.txt
+    # backgrounded, it's a binder call and hangs too if servicemanager is wedged
+    service list > /data/misc/service-list.txt 2>&1 &
+    # about 3 minutes in, every d-state task's kernel stack goes to dmesg (kmsg-latest.txt)
+    if [ $n -eq 7 ]; then
+        echo w > /proc/sysrq-trigger
+    fi
     dmesg > /data/misc/kmsg-latest.txt 2>/dev/null
     echo "=== $(date) ===" >> /data/misc/watch-wchan.txt
     for d in /proc/[0-9]*; do
@@ -27,11 +35,13 @@ while true; do
     echo "--- zygote ---" >> /data/misc/watch-wchan.txt
     for d in /proc/[0-9]*; do
         c=$(cat $d/comm 2>/dev/null)
-        if [ "$c" = "zygote" ] || [ "$c" = "system_server" ] || [ "$c" = "dexopt" ]; then
+        case "$c" in zygote|system_server|dexopt|surfaceflinger|servicemanager|bootanimation|glrenderd)
             echo "== $d $c ==" >> /data/misc/watch-wchan.txt
-            ls -l $d/fd 2>/dev/null | head -12 >> /data/misc/watch-wchan.txt
-            tail -6 $d/maps 2>/dev/null >> /data/misc/watch-wchan.txt
-        fi
+            for t in $d/task/*; do
+                echo "${t##*/} $(cat $t/comm 2>/dev/null) $(cat $t/wchan 2>/dev/null)" >> /data/misc/watch-wchan.txt
+            done
+            ;;
+        esac
     done
     sleep 25
 done

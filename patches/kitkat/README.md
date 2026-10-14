@@ -12,6 +12,12 @@ cd aosp-kitkat/system/core && git apply ../../patches/kitkat/<name>.patch
 | Patch | Project | What |
 | --- | --- | --- |
 | `build-jdk-openjdk6.patch` | `build` | `core/main.mk`: accept OpenJDK 6 (Oracle JDK 6 uninstallable in 2026); version check below still enforces 1.6.x |
+| `bionic-binder-uapi-64bit.patch` | `bionic` | `libc/kernel/common/linux/binder.h` as the 64-bit binder abi (protocol 8), the only one the 4.4 kernel speaks |
+| `frameworks-native-binder-64bit.patch` | `frameworks/native` | libbinder and servicemanager on that abi, every pointer and offset the kernel sees is 64 bits. replaces `binder-uapi-64bit.patch`, reset both projects before applying |
+| `device-generic-goldfish-glrenderd.patch` | `device/generic/goldfish` | the emulator gl libs dial glrenderd's abstract socket instead of a qemu pipe, gralloc builds as `gralloc.maple` and falls back to `gralloc.default` without glrenderd, gles1 encoder fix for image specification while `TEXTURE_EXTERNAL_OES` is enabled |
+| `frameworks-native-egl-glrenderd.patch` | `frameworks/native` | egl loader picks the emulation libs when glrenderd answers, libagl otherwise. replaces `egl-use-software-renderer.patch` |
+| `sdk-glrenderd.patch` | `sdk` | glrenderd's host renderer, alpha twins for opaque configs (adreno won't copy an opaque pbuffer into rgba) and headless posting |
+| `system-core-glrenderd-fs-config.patch` | `system/core` | 0755 for what gets exec'd in glrenderd's chroot, make_ext4fs takes modes from fs_config |
 | _(more expected)_ | — | mkbootimg `Image.gz-dtb`/base-0 support, init/vold/adbd hardening once measured on maple (cf. `patches/donut/` precedent) |
 
 Notes:

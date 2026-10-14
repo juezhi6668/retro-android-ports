@@ -45,6 +45,10 @@ BOARD_CACHEIMAGE_FILE_SYSTEM_TYPE := ext4
 TARGET_BOARD_PLATFORM := maple
 TARGET_BOARD_PLATFORM_GPU := qcom-adreno540
 
+# the goldfish gl libs are the guest half of glrenderd (tools/glrenderd), which replays them on
+# the adreno 540 from lineage's chroot. see patches/kitkat/*glrenderd*
+BUILD_EMULATOR_OPENGL := true
+
 # BLOCKER #1 — 32-bit userspace on a 64-bit SoC:
 # KitKat (API 19) has NO arm64 support (TARGET_ARCH arm64 + TARGET_2ND_ARCH
 # landed in Lollipop 5.0). MSM8998 (Kryo 280) is ARM64. First-bringup path
