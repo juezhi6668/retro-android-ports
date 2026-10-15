@@ -7,10 +7,13 @@ The Donut/cooper playbook
 [`docs/devices/cooper.md`](cooper.md)) is the method reference; this doc
 is the maple delta.
 
-Status: **skeleton only — does not build or boot yet.** The tree in
-[`devices/maple/kitkat/`](../../devices/maple/kitkat/) is a commented
-starting point synced from Sony/Lineage reference values. Work through the
-blockers below in order; do not start HAL ports until blocker 1 is resolved.
+Status: **BOOTED 2026-10-15** — full KitKat userspace on the 4.4 kernel:
+`sys.boot_completed=1`, 75 binder services, Launcher compositing at
+1080x1920, working touch, USB adb (`18d1:4ee7`). The tree in
+[`devices/maple/kitkat/`](../../devices/maple/kitkat/) is a commented,
+boot-verified device tree. Remaining gaps (no cellular/audio/camera/HW GL
+yet — same documented-limitations posture as cooper early on) are tracked
+at the bottom; blockers 1–4 below are all resolved.
 
 ## Confirmed device state (2026-10-13, owner-reported)
 
@@ -87,27 +90,31 @@ kernel `4.4.302-whatawurst+` aarch64, 8× Kryo (4×0x801 + 4×0x800), platform
   `patches/donut/mkbootimg-pagesize.patch`; see
   `docs/porting-notes-kitkat.md`).
 
-### Blocker list (in order)
+### Blocker list (all resolved 2026-10-15 — kept for the record)
 
-1. **ARM64 SoC vs 32-bit-only KitKat (HARD BLOCKER).** KitKat has no
-   `arm64` target (64-bit support landed in Lollipop 5.0). Path is 32-bit
-   `armeabi-v7a` userspace on the 4.4 kernel — needs a feasibility spike
-   (can the yoshino kernel boot an ARM32 userspace? modem/firmware blobs
-   are 64-bit; what breaks?). If the spike fails, maple/KitKat is
-   infeasible and the next step is maple/Lollipop instead. **Do not invest
-   in HALs before this is answered.**
-2. **Toolchain/container.** KitKat needs JDK 6 + Ubuntu 14.04-era host
-   (cf. Donut's Hardy/JDK5 chroot). See `docs/porting-notes-kitkat.md`.
-   No container exists yet — first task.
-3. **Display/framebuffer.** 4K panel + Adreno 540 have no KitKat EGL/HWC.
-   First boot will be software rendering (cf. cooper `libagl` fallback) at
-   a verified density; HWComposer/gralloc are later.
-4. **Storage/init.** GPT block paths (`/dev/block/.../by-name/*`) must be
-   confirmed from stock `/proc/partitions` + TWRP `fstab_maple.recovery`;
-   init.rc/fstab skeletons are placeholders.
+1. **ARM64 SoC vs 32-bit-only KitKat — VERDICT: VIABLE.** 32-bit
+   `armeabi-v7a` userspace (cortex-a15) runs on the 4.4 kernel
+   (CONFIG_COMPAT); the only kernel-side port needed was the binder
+   64-bit UAPI (below). Modem/firmware blobs stay untouched (no
+   cellular yet).
+2. **Toolchain/container — DONE.** Trusty + JDK 6 container
+   (`containers/kitkat/Dockerfile`), `build-jdk-openjdk6.patch`,
+   `lib32stdc++6 lib32z1`, `python` symlink. Full `make -j6` green.
+3. **Display/framebuffer — SOFTWARE PATH WORKING.** No KitKat EGL/HWC
+   for Adreno 540; libagl fallback renders correctly at 1080x1920 once
+   gralloc reports the kernel stride (see TEST 28). glrenderd (adreno
+   in a Lineage chroot) runs but stays OFF: its uncoordinated flips
+   wedge the mdss overlay start (EBUSY). No DTB/driver work needed
+   for basic display.
+4. **Storage/init — DONE.** GPT mounts by raw node
+   (system→sde46, cache→sda5, userdata→sda15, persist→sda4);
+   `/dev/block/bootdevice/` does NOT exist on KitKat — by-name lives
+   under `/dev/block/platform/soc/by-name/`. ext4 everywhere
+   (`TARGET_USERIMAGES_USE_EXT4`, TWRP mke2fs for wiped partitions).
 5. **WiFi/BT/RIL/camera/GPS.** All proprietary (BCM43xx + qcwcn, QCOM BT,
-   MSM8998 RIL, QTI camera). Expect stub/generic first (cooper pattern:
-   `USE_CAMERA_STUB`, rild removed, BT disabled), then per-PHAL ports.
+   MSM8998 RIL, QTI camera). Still stub/generic (cooper pattern:
+   `USE_CAMERA_STUB`, rild removed, BT disabled) — per-HAL ports are
+   the next work after input/display.
 6. **No cellular/audio/camera on first boot** — same documented-limitations
    posture as cooper (see Status below).
 
@@ -125,9 +132,9 @@ kernel `4.4.302-whatawurst+` aarch64, 8× Kryo (4×0x801 + 4×0x800), platform
 
 ## Status
 
-Skeleton synced from reference values; **no build, no boot, no blobs yet.**
-Pre-build tooling is in place (no server needed for these):
-`containers/kitkat/Dockerfile` (untested Trusty/JDK6 recipe),
+Boots to UI with touch + adb (2026-10-15 — see TEST 24–29 for the
+bringup log). Pre-build tooling (no server needed for these):
+`containers/kitkat/Dockerfile` (Trusty/JDK6, verified),
 `scripts/dump-maple-stock.sh` (stock facts over adb → `dumps/`, gitignored),
 `scripts/sync-device-tree.sh maple kitkat` (verified).
 Next actions (checkboxes for the log):
@@ -196,11 +203,22 @@ Next actions (checkboxes for the log):
       precedent; logcat-to-file service): only system+userdata mount
       (cache sda5 + persist sda4 fail, now isolated, non-fatal). Still no
       `on boot` (no logcat file) + healthd loop.
-- [ ] BLOCKER: `/data` (sda15) is Lineage-FBE-encrypted (garbage filenames
-      in `/data/system`). KitKat vold parks in decrypt-wait, post-fs-data
-      copy/mkdir/restorecon all fail on FBE, `on boot` never fires.
-      → userdata MUST be formatted ext4 (TWRP wipe, cooper RFS→ext4
-      precedent). Awaiting owner approval (destroys Lineage apps/data).
+- [x] BLOCKER, resolved 2026-10-14 (no approval needed — data was
+      already gone): `/data` (sda15) AND `/cache` (sda5) were found fully
+      zeroed, no filesystem at all (`EXT4-fs (sda15): VFS: Can't find ext4
+      filesystem` in kmsg, blkid blank, head + 1 MB samples all zero; the
+      Lineage FBE data was already destroyed, cause unknown — an erase
+      without format). Only `/system` mounted, rootfs stayed ro so every
+      `/data/property` write failed, installd/keystore sat in `restarting`
+      and boot never completed. Fix: formatted both ext4 live in TWRP
+      (`mke2fs -t ext4 -b 4096 -L userdata/cache`). Tree fix in the same
+      pass: `mkdir /cache + /persist` before the mounts in `init.maple.rc`
+      (those mounts failed ENOENT SILENTLY — no ramdisk dirs, nothing in
+      kmsg), drop the invalid `wait_for_coldboot_done` (KitKat init has no
+      such command), drop the duplicate `import /init.maple.rc` (all five
+      services logged as ignored duplicates), fstab by-name paths now
+      `/dev/block/platform/soc/by-name/*` (`/dev/block/bootdevice/` does
+      not exist on KitKat).
 - [ ] Kernel (`Image.gz-dtb`): critical path — need owner's Lineage build
       output. `make -j6 systemimage` running meanwhile to validate the rest
       of userspace.
@@ -211,17 +229,18 @@ Next actions (checkboxes for the log):
       (out-of-band blob, NOT in git — same policy as cooper blobs).
       `BOARD_KERNEL_CMDLINE` updated from the live bootimg config.
       Full `make -j6` running.
-- [ ] Re-run `scripts/dump-maple-stock.sh` (fixed version) for the missing
+- [x] Re-run `scripts/dump-maple-stock.sh` (fixed version) for the missing
       `/proc/cmdline`, `/proc/partitions`, fb0 sysfs nodes
       → re-ran clean (no disconnect); root-gated nodes still empty under
-      the shell user. Get them from TWRP recovery adb (runs as root) later;
-      nothing essential is blocked.
-- [ ] Run `scripts/dump-maple-stock.sh` against stock/TWRP maple; fix
-      `fstab.maple` + `system.prop` density against the dump
-- [ ] `repo init -u https://android.googlesource.com/platform/manifest -b android-4.4.4_r2` → `aosp-kitkat/` (or confirm exact `_r` rev)
-- [ ] Build the container on the build server, first `lunch full_maple-eng`
-- [ ] ARM32-userspace-on-msm8998 feasibility spike (blocker 1 verdict)
-      → VERDICT: VIABLE. Binder was the blocker, now fixed (below).
+      the shell user — pulled from TWRP recovery adb (runs as root)
+      instead; nothing essential is blocked.
+- [x] Run `scripts/dump-maple-stock.sh` against stock/TWRP maple; fix
+      `fstab.maple` + `system.prop` density against the dump → done
+      (platform/soc by-name paths, density 410 pinned).
+- [x] `repo init -u https://android.googlesource.com/platform/manifest -b android-4.4.4_r2` → `aosp-kitkat/` (shallow `--depth=1 -c --no-tags`)
+- [x] Build the container on the build server, first `lunch full_maple-eng`
+- [x] ARM32-userspace-on-msm8998 feasibility spike (blocker 1 verdict)
+      → VERDICT: VIABLE (see TEST 26 + binder saga below).
 - [x] TEST 8-13 (binder saga): servicemanager/healthd died on binder
       WRITE_READ EINVAL. Root cause: KitKat's 24-byte binder_write_read
       (ioctl 0xc0186201) vs the v8-only kernel's 40-byte layout
@@ -257,78 +276,172 @@ Next actions (checkboxes for the log):
 - [x] TEST 22 (autowinch): `sbin/autowinch.sh` + service returns the phone
       to TWRP 15 min after boot — no more manual button dances. Full
       flash→boot→pull loop now runs unattended (except screen watch).
-- [ ] NEXT: find why zygote never forks system_server. Prime suspects:
-      (a) zygote stuck preloading (EGL/dlopen? needs fd/maps probe —
-      watcher has a zygote-fd section staged in test21+),
-      (b) MountService/volume wait (CHARQUIRKS: needs storage_list.xml +
-      nosdcard or MountService NPEs; vold disabled),
-      (c) reply-path EINVAL breaking a boot-critical RPC (addService with
-      objects? FREE_BUFFER/death layout still suspect).
-- [ ] PENDING (blocked on build-server access): formalize
-      `patches/kitkat/binder-uapi-64bit.patch` (bionic binder.h,
-      Parcel.h/Parcel.cpp, IPCThreadState.h/.cpp, servicemanager
-      binder.h/binder.c/service_manager.c — all edited live on server,
-      diffs not yet pulled) + `egl-use-software-renderer.patch`
-      (Loader.cpp) + REMOVE temp diag (smdbg/bdbg in service_manager.c
-      + binder.c, dump-boot-log/autowinch services). Then:
-      `TARGET_NO_KERNEL := true`, USB adb via configfs gadget
-      (CHARQUIRKS recipe), storage phase, kernel rebuild (logger +
-      alarm drivers).
-- [ ] TEST 23: why it wedges after the 15 boot jars (15 is the whole kitkat
-      `BOOTCLASSPATH`, zygote dexopts those, app dexopt never starts)
-      - bootanimation only starts from surfaceflinger's `init()`, right
-        before it registers with servicemanager. so sf got through init and
-        the wedge is a lost binder reply (the reply-path EINVAL above).
-        the kernel stops parsing a write at the first bad command and drops
-        the rest, so any 32-bit leftover (BC_FREE_BUFFER, death
-        notifications, BC_*_DONE) can eat a following BC_REPLY and leave
-        the caller asleep forever (S state, zero cpu)
-      - test 20-21 saw no system_server at all, so it dies or stalls before
-        the healthd and vold waits below can matter. those still have to be
-        fixed for it to get further, the next capture shows whether
-        system_server appears once binder is fixed
-      - fix: `bionic-binder-uapi-64bit.patch` +
-        `frameworks-native-binder-64bit.patch`, which cover every command
-        and also the `continueWrite` objects memcpy (was copying half)
-      - healthd back on: BatteryService throws without `batterypropreg`,
-        which aborts system_server's core service block before window
-        manager starts
-      - vold back on: system_server blocks forever in
-        `MountService.waitForAsecScan()` without it
-      - `dump-boot-log.sh` adds `service list`, per thread wchan for sf,
-        system_server and servicemanager, and a sysrq-w (d-state stacks)
-        into kmsg about 3 minutes in
-- [ ] storage (untested, set up before ui so apps don't start without it)
-      - internal is emulated, `/data/media` through the `sdcard` fuse daemon
-        at `/mnt/shell/emulated`, exposed as `/storage/emulated/legacy` with
-        the `/sdcard` links (the nexus 5 kitkat layout). overlay
-        `storage_list.xml` marks it emulated, which makes it primary
-      - `sdcard` is `class main`, `late_start` never fires without `mount_all`
-      - microsd is vold's `sdcard1`, devpath `/devices/soc/c0a4900.sdhci/mmc_host`
-        from lineage's yoshino fstab, without the trailing `*` (kitkat vold
-        prefix matches). vold mounts on `/mnt/media_rw/sdcard1` and starts
-        `fuse_sdcard1` for `/storage/sdcard1`
-      - kitkat vold is vfat only, exfat cards show as unmountable
-- [ ] gpu (untested, ported from [pdx203-jellybean](https://github.com/chardidathing/pdx203-jellybean)
-      by @chardidathing, where the same split runs 4.2 at ~60fps on an adreno 650)
-      - no kitkat-era adreno driver knows the 540, and lineage's can't load into kitkat
-        processes. so kitkat runs the emulator's gl libs, which stream gl calls over the
-        `glrenderd` abstract socket to `glrenderd`, the emulator's host renderer built as a
-        32-bit daemon in a chroot of lineage 20's own system and vendor. it draws on adreno,
-        reads the composed frame back and pans fb0
-      - build: apply the four `*glrenderd*` patches, then
-        `tools/glrenderd/build.sh $AOSP_DIR <android-ndk-r21e>`,
-        `tools/glrenderd/extract-lineage.sh <lineage 20 maple zip> <sysroot> [oem.img]`,
-        `tools/glrenderd/stage.py <sysroot> tools/glrenderd/out $AOSP_DIR/vendor/sony/maple-glr`.
-        the oem partition is lineage's vendor and kitkat never touched it, so a dump of it
-        from twrp works if the zip is gone
-      - without the staged chroot, or with glrenderd down, gralloc and egl fall back to
-        `gralloc.default` and libagl. hwui needs gles2, so apps will likely crash there
-      - the protocol is unchanged from 4.2 (the renderControl and gl specs are identical),
-        glrenderd is built against kitkat's sdk anyway
-- [ ] touch and buttons (untested)
-      - clearpad doesn't finish probing until `post_probe_start` is written (lineage's
-        init.yoshino.rc does the same), done in post-fs-data
-      - `clearpad.idc` so it's a touchscreen, `gpio-keys.kl` for volume and the two stage
-        camera key (528 focus, 766 camera), power is qpnp_pon through Generic.kl
-      - nav bar on (`config_showNavigationBar`), the phone has no hardware home or back
+- [ ] TEST 24 (after the TWRP ext4 format of userdata/cache): reboot
+      to KitKat, verify `/data` + `/cache` + `/persist` all mount,
+      installd/keystore leave `restarting`, system_server appears under
+      zygote, dexopt proceeds past the 15 boot jars. (A 15-min autowinch
+      fired mid-diagnosis on 2026-10-14 and returned the phone to TWRP
+      before `ps`/`service list` could be captured — consider disabling
+      the autowinch start now that adb works.)
+      → PARTIAL 2026-10-14/15: reboot showed `/data` (sda15) MOUNTED
+      (`EXT4-fs (sda15): mounted ... noauto_da_alloc,barrier=0`, no more
+      property errors), installd/keystore `running`, `/data` fully
+      populated, servicemanager answers (16 native services incl.
+      SurfaceFlinger/batterypropreg/keystore). system_server now FORKS
+      regularly and reaches PMS apk scan (WM/AM/PackageManager threads,
+      SettingsProvider + batterystats writes) but each life dies ~10 s in
+      during `collectCertificatesLI` manifest parse (traces.txt via
+      SIGQUIT: main in `CaseMapper.toLowerCase` ← `Attributes$Name.
+      hashCode` ← `ManifestReader.readEntries` ← `scanPackageLI` ←
+      `scanDirLI`), Java-level (no tombstones, logcat blind), dalvik-cache
+      stays empty (dies before dexopt). Zygote daemon ALSO cycles every
+      ~10-60 s with no tombstone/kmsg (prime suspect: RuntimeException
+      path in ZygoteInit.main — blind without logcat). `stop autowinch`
+      used live to defuse the 15-min fuse.
+- [x] TEST 25 (diag build 2026-10-15): TEMP file markers added on the
+      build server (ZygoteInit preload/fork/death → /data/misc/zygote.txt,
+      ServerThread throwable → /data/misc/syscrash.txt, PMS per-apk →
+      /data/misc/pmscan.txt), system+boot rebuilt (WITH_DEXPREOPT already
+      on), flashed via TWRP (simmg2img raw 5 GB + 17 MB boot, both md5
+      readback-verified) + reboot. Phone went DARK after `adb reboot`
+      (blank screen, red LED, no USB at all — no adb/fastboot/enumeration;
+      UART silent) and needs physical power-on (no remote hands). Images
+      verified structurally sound (ANDROID!/sparse/ext4 magics, ramdisk
+      contains usb.rc + usbudc.sh + fixed init files, markers in
+      services.jar/framework2.jar, cmdline keeps androidboot.hardware).
+      Suspect power event, not image content — TBR on power-on.
+- [x] TEST 26 (heap fix 2026-10-15): ROOT CAUSE of the death loop —
+      `java.lang.OutOfMemoryError` in `JarUtils.verifySignature` on the
+      FIRST apk (`/system/framework/framework-res.apk`, 11.8 MB) every
+      life; build.prop had NO dalvik heap tuning (Dalvik defaults on a
+      4 GB phone). Fix: inherit
+      `frameworks/native/build/phone-xhdpi-2048-dalvik-heap.mk`
+      (192m/512m) in full_maple.mk. Result: scan sails through 54 pkgs,
+      **75 services incl. activity/package/window**, ONE stable zygote
+      life, zero syscrash, boot animation completes, **Android UI on
+      screen**. WITH_DEXPREOPT keeps dalvik-cache empty (by design).
+- [ ] TEST 27 (USB-ABD 2026-10-15): full boot has NO USB (gadget never
+      binds; KitKat adb unreachable). kmsg shows adbd alive but ZERO
+      usbudc lines — the `on property:sys.usb.config=adb` trigger never
+      fires once system_server runs (UsbDeviceManager owns that property).
+      Fix (in tree, flashed): `start usbudc` unconditionally `on boot`
+      next to the adbd safety net. Display also garbled (hsync-tear —
+      stride/timing; needs adb + dumpsys/fb0 probe, after USB works).
+      TEMP diag reverted; server↔repo re-verified byte-identical.
+      → ROOT CAUSE FOUND 2026-10-15: `import /init.maple.usb.rc` was
+      missing from init.maple.rc — the import (and the usb files) lived
+      only on the build server and an earlier repo→server sync dropped
+      the import line, so usb.rc was copied to ramdisk but never parsed,
+      `usbudc` unknown, `start usbudc` a silent no-op. Fix: import
+      restored (+ unconditional `start usbudc` kept as belt-and-braces).
+      Rebuilt boot-only, flashed, rebooted: **18d1:4ee7 enumerates,
+      `maplekk device` in adb, `sys.boot_completed=1`, 75 services,
+      /system+/data+/cache+/persist ALL mounted, Launcher compositing.**
+      KitKat on maple is BOOTED. Remaining: display hsync-tear, autowinch
+      still armed (reboots to recovery 15 min after every boot — remove
+      once USB is trusted), TEMP diag already reverted.
+- [x] TEST 28 (display 2026-10-15): panel shows stale xboot splash while
+      fb0 holds perfect frames (launcher decodes clean) — mdss never
+      presents fb0 (white-frame + unblank-cycle tests both no-ops
+      visually; pan stuck 0,0). Sub-findings: (a) fb0 stride is 4352 B
+      (1088 px) but gralloc reported 1080 → every row sheared 8 px into
+      a parallelogram — FIXED in `gralloc_alloc` (report
+      `finfo.line_length` stride for `HW_FB`; formalized as
+      `patches/kitkat/hardware-libhardware-gralloc-fb-stride.patch`,
+      live-pushed + verified by inverse shear in fb0 decode);
+      (b) glrenderd IS running (12 fps, correct-stride copies) but
+      computed `flips=0` at startup (fb HAL doubles yres_virtual later;
+      startup race) — cosmetic while fbdev flips also stall;
+      (c) panel liveness is RACY across boots (live in 2 of 4 observed
+      boots: overlay start vs MDP idle-collapse/splash-handoff timing;
+      the single hard error ever seen is `mdp ctl start failed`
+      (EBUSY) on a mid-boot glrenderd restart). glrenderd stays OFF for
+      now (removes the second uncoordinated flipper; its flips=0
+      startup race also needs fixing before it returns), SF-only flips
+      drive the panel. If a future boot freezes on the splash, suspect
+      this race first (pan stuck + EBUSY in kmsg). No DTB/driver work
+      needed for basic display.
+      Autowinch REMOVED from tree (adb is trusted now).
+      → RESOLVED 2026-10-15: glrenderd's uncoordinated FBIOPAN flips were
+      wedging the mdss overlay start (`mdp ctl start failed`, EBUSY) and
+      freezing the panel on the splash. With glrenderd NOT started (pure
+      SF+libagl), the panel is live and (with the stride fix) CORRECT.
+      glrenderd stays off until its split is re-architected.
+- [x] TEST 29 (touch 2026-10-15): touches reach the kernel (clearpad MT
+      events) and the dispatcher (RecentQueue) but nothing responds.
+      Root cause: systemui crash-loop (`eglConfig not initialized` in
+      ImageWallpaper — needs ES2, libagl is ES1-only, glrenderd down;
+      ~1000 dropbox crashes) kills the keyguard window each life, and
+      PhoneWindowManager parks a zombie fullscreen KeyguardScrim
+      ("Removing keyguard window (Did it crash?)") that eats all input.
+      Fix: `ImageWallpaper` falls back to the canvas path when EGL init
+      throws (formalized as
+      `patches/kitkat/frameworks-base-systemui-wallpaper-canvas-fallback.patch`;
+      APK+odex live-pushed, takes effect after reboot). Result: systemui
+      stable, scrim gone, launcher focused, **touch works perfectly**.
+      (Touch mapping is fine — firmware sends full-range coords.)
+- [x] SYNC AUDIT 2026-10-15 (server vs repo): all 7 patches/kitkat
+      identical both sides AND match the live tree exactly (reverse-apply
+      checks pass); no stray smdbg/bdbg left. Server was AHEAD in 4
+      places — pulled into the repo (uncommitted): `init.maple.usb.rc` +
+      `usbudc.sh` (new files, the ADB-via-configfs bringup),
+      BoardConfig `WITH_DEXPREOPT := true`, full_maple.mk usb.rc/usbudc
+      lines. devices/maple/kitkat now byte-identical server↔repo
+      (excluding the kernel blob).
+- [x] NEXT (resolved by TEST 26): zygote DOES fork system_server —
+      the earlier "never forks" samples were the PMS heap-OOM death loop
+      (each life died in `collectCertificatesLI` before forking).
+      MountService/volume waits and the reply-path EINVAL did not block
+      the boot once the heap was sized.
+- [x] PENDING (unblocked): all live-server edits formalized —
+      `bionic-binder-uapi-64bit` + `frameworks-native-binder-64bit`
+      (+ egl/glrenderd set) are in `patches/kitkat/` and verified
+      identical to the live tree (reverse-apply checks); smdbg/bdbg
+      temp diag gone; `boot.img` is packed by `make bootimage` from the
+      dumped prebuilt kernel (`TARGET_PREBUILT_KERNEL`, NOT in git) +
+      built ramdisk; USB adb via configfs gadget works
+      (`init.maple.usb.rc` + `usbudc.sh`); no kernel rebuild needed
+      (logger-less logging via files + dropbox + debuggerd).
+- [x] TEST 23 (superseded): the 15-jar wedge was the binder 64-bit ABI
+      gap (24-byte vs 40-byte `binder_write_read`, now patched) plus the
+      PMS heap sizing — NOT a lost-reply stall. system_server runs,
+      dexopt is a non-issue (WITH_DEXPREOPT preopts at build).
+- [x] storage (working): internal is emulated, `/data/media` through the
+      `sdcard` fuse daemon at `/mnt/shell/emulated`, exposed as
+      `/storage/emulated/legacy` with the `/sdcard` links (nexus 5
+      kitkat layout, live-verified mounted). overlay `storage_list.xml`
+      marks it emulated/primary. `sdcard` runs as `class main`
+      (no `late_start` needed since mounts are by hand, not `mount_all`).
+      Microsd (`sdcard1` via vold on
+      `/devices/soc/c0a4900.sdhci/mmc_host`, vfat only) still UNTESTED —
+      next storage item.
+- [x] gpu (split tested 2026-10-15): no KitKat adreno driver for the 540;
+      libagl software fallback renders the full UI correctly at
+      1080x1920 (fb0 decodes pixel-perfect) once gralloc reports the
+      kernel stride (see TEST 28). glrenderd (adreno in a Lineage-20
+      chroot, 12 fps readback) RUNS but stays OFF by default: its
+      uncoordinated FBIOPAN flips wedge the mdss overlay start (EBUSY)
+      and freeze the panel; also its flips=0 startup race (fb HAL
+      doubles yres_virtual after glrenderd samples it). Re-architect
+      before returning (single flipper). ES2 gap stays: software GLES
+      is ES1-only, so ES2 clients (live wallpaper → canvas fallback
+      patch; hwui apps) need glrenderd or another driver. glrenderd
+      design (ported from
+      [pdx203-jellybean](https://github.com/chardidathing/pdx203-jellybean)
+      by @chardidathing): emulator gl libs stream over the `glrenderd`
+      abstract socket to the daemon (32-bit, in a chroot of lineage 20's
+      system+vendor), which draws on adreno, reads back, pans fb0.
+      Build: apply the four `*glrenderd*` patches, then
+      `tools/glrenderd/build.sh $AOSP_DIR <android-ndk-r21e>`,
+      `tools/glrenderd/extract-lineage.sh <lineage 20 maple zip>
+      <sysroot> [oem.img]`, `tools/glrenderd/stage.py <sysroot>
+      tools/glrenderd/out $AOSP_DIR/vendor/sony/maple-glr` (oem ==
+      lineage vendor; dump it from TWRP if the zip is gone). Protocol
+      unchanged from 4.2; daemon built against the KK sdk.
+- [x] touch and buttons (touch TESTED working 2026-10-15): clearpad
+      probes after `post_probe_start` in post-fs-data (as lineage);
+      `clearpad.idc` + full-range firmware coords map 1:1 (no scaling
+      fix needed); `gpio-keys.kl` shipped (volume keys dispatch
+      verified: keyCode 24 in RecentQueue); power via qpnp_pon +
+      Generic.kl; nav bar on (`config_showNavigationBar`). Two-stage
+      camera key (528/766) UNTESTED.

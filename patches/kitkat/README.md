@@ -18,7 +18,9 @@ cd aosp-kitkat/system/core && git apply ../../patches/kitkat/<name>.patch
 | `frameworks-native-egl-glrenderd.patch` | `frameworks/native` | egl loader picks the emulation libs when glrenderd answers, libagl otherwise. replaces `egl-use-software-renderer.patch` |
 | `sdk-glrenderd.patch` | `sdk` | glrenderd's host renderer, alpha twins for opaque configs (adreno won't copy an opaque pbuffer into rgba) and headless posting |
 | `system-core-glrenderd-fs-config.patch` | `system/core` | 0755 for what gets exec'd in glrenderd's chroot, make_ext4fs takes modes from fs_config |
-| _(more expected)_ | — | mkbootimg `Image.gz-dtb`/base-0 support, init/vold/adbd hardening once measured on maple (cf. `patches/donut/` precedent) |
+| `hardware-libhardware-gralloc-fb-stride.patch` | `hardware/libhardware` | `modules/gralloc/gralloc.cpp`: report the kernel's `line_length` stride for `HW_FB` buffers (mdss pads 1080 RGBA lines to 1088; generic align-4 reported 1080 and every row sheared into a parallelogram) |
+| `frameworks-base-systemui-wallpaper-canvas-fallback.patch` | `frameworks/base` | `packages/SystemUI/.../ImageWallpaper.java`: fall back to the canvas wallpaper instead of throwing when EGL has no ES2 config (software-only GLES without glrenderd; the crash looped systemui and stranded a zombie KeyguardScrim eating all touch) |
+| _(more expected)_ | — | init/vold/adbd/HAL hardening once measured on maple (cf. `patches/donut/` precedent). Note: the predicted mkbootimg `Image.gz-dtb`/base-0 backport was NOT needed (verified geometry) |
 
 Notes:
 

@@ -12,6 +12,13 @@ PRODUCT_PACKAGES := \
 $(call inherit-product, $(SRC_TARGET_DIR)/product/core.mk)
 $(call inherit-product, $(SRC_TARGET_DIR)/product/generic.mk)
 
+# Dalvik heap: 4 GB RAM, 410 dpi 1080p panel → the 2048 bucket
+# (heapgrowthlimit 192m, heapsize 512m). Without this the build ships
+# Dalvik's tiny defaults and system_server OOMs verifying the 11.8 MB
+# framework-res.apk on first boot (seen 2026-10-15: OutOfMemoryError in
+# JarUtils.verifySignature every life, dalvik-cache never populates).
+$(call inherit-product, frameworks/native/build/phone-xhdpi-2048-dalvik-heap.mk)
+
 DEVICE_PACKAGE_OVERLAYS := vendor/sony/maple/overlay
 
 PRODUCT_NAME := full_maple
@@ -28,6 +35,8 @@ PRODUCT_COPY_FILES += \
     vendor/sony/maple/fstab.maple:root/fstab.maple \
     vendor/sony/maple/init.rc:root/init.rc \
     vendor/sony/maple/init.maple.rc:root/init.maple.rc \
+    vendor/sony/maple/init.maple.usb.rc:root/init.maple.usb.rc \
+    vendor/sony/maple/usbudc.sh:root/sbin/usbudc.sh \
     vendor/sony/maple/ueventd.maple.rc:root/ueventd.maple.rc \
     vendor/sony/maple/autowinch.sh:root/sbin/autowinch.sh \
     vendor/sony/maple/dump-boot-log.sh:system/bin/dump-boot-log.sh \

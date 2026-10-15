@@ -27,7 +27,7 @@ true retro-port (candidate for more 2010–2012 hardware).
 | Device | Codename | Release | Status |
 | --- | --- | --- | --- |
 | Samsung Galaxy Ace GT-S5830/L/T | `cooper` | Donut 1.6 (DRD35) | Boots on-device, daily-driving basics OK (see device doc) |
-| Sony Xperia XZ Premium G8141/G8142 | `maple` | KitKat 4.4.4 (KTU84Q) | Skeleton only, not building/booting yet (see device doc) |
+| Sony Xperia XZ Premium G8141/G8142 | `maple` | KitKat 4.4.4 (KTU84Q) | Boots to UI: launcher, touch, display, USB adb (see device doc) |
 
 Device docs (hardware specifics, verified fixes, open gaps) live in
 [`docs/devices/`](docs/devices/): [cooper](docs/devices/cooper.md),
@@ -71,18 +71,23 @@ checkouts), `out/` (flashable zip outputs), `work/` (packaging scratch).
    + `run_program` shims, 51 toolbox symlinks as real symlinks).
    `scripts/build-cooper-donut-skeleton.py` builds the small preview zip.
 
-## Building the maple KitKat port (skeleton — no working build yet)
+## Building the maple KitKat port (boots to UI — see device doc)
 
 1. **AOSP tree**: `repo init -u https://android.googlesource.com/platform/manifest -b android-4.4.4_r2`
-   then `repo sync` (→ `aosp-kitkat/`, or point `AOSP_DIR` elsewhere).
+   then `repo sync` (→ `aosp-kitkat/`, or point `AOSP_DIR` elsewhere;
+   use a shallow `repo sync -c --no-tags`, full history is 100+ GB).
 2. **Ported tree**: `scripts/sync-device-tree.sh maple kitkat`
-   (→ `$AOSP_DIR/vendor/sony/maple`). `patches/kitkat/` is empty until the
-   first measured breakage — see [`patches/kitkat/README.md`](patches/kitkat/README.md).
-3. **Period container** (does not exist yet): Ubuntu 14.04 + JDK 6 era,
-   `lunch full_maple-eng && make -j$(nproc)`. See
-   [`docs/porting-notes-kitkat.md`](docs/porting-notes-kitkat.md) and the
-   blocker list in [`docs/devices/maple.md`](docs/devices/maple.md) — the
-   ARM32-userspace-on-MSM8998 spike comes before any build tuning.
+   (→ `$AOSP_DIR/vendor/sony/maple`), then apply `patches/kitkat/`
+   (see [`patches/kitkat/README.md`](patches/kitkat/README.md) — binder
+   64-bit UAPI, EGL/glrenderd, gralloc stride, wallpaper fallback, JDK 6).
+   The kernel (`vendor/sony/maple/kernel`) is a TWRP-dumped blob, kept
+   out of git.
+3. **Period container**: Ubuntu 14.04 + JDK 6 (`containers/kitkat/`),
+   `lunch full_maple-eng && make -j$(nproc)`. Flash `boot.img` +
+   raw-ext4 `system.img` (via `simg2img`) over TWRP `dd`, hashes
+   verified by readback. Current state (Oct 2026): launcher, touch,
+   display, USB adb working; WiFi/BT/RIL/camera/GPS still stub —
+   see [`docs/devices/maple.md`](docs/devices/maple.md).
 
 ## Roadmap
 
@@ -91,8 +96,10 @@ checkouts), `out/` (flashable zip outputs), `work/` (packaging scratch).
       camera sensor feed (needs kernel driver work)
 - [x] Generalize the device layout/scripts for `devices/<codename>/`
       (`cooper/donut` + `maple/kitkat` skeletons share one sync script)
-- [ ] KitKat 4.4.4 on `maple`: build container → ARM32-on-MSM8998 spike →
-      first `lunch full_maple-eng` (see `docs/devices/maple.md` blockers)
+- [x] KitKat 4.4.4 on `maple`: boots to launcher with touch, display,
+      USB adb (Oct 2026 — see `docs/devices/maple.md`)
+- [ ] Finish maple: WiFi/BT/RIL/camera/GPS HALs, glrenderd HW compositing,
+      microsd, audio
 - [ ] Other ancient releases on newer hardware — Eclair/Froyo next;
       Cupcake is impossible (source gone), documented learning still
       applies to custom 1.5 builds if a tree surfaces

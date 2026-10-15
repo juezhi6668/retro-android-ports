@@ -1,11 +1,19 @@
 # init.maple.rc — KitKat skeleton for Sony maple (MSM8998, GPT/ext4)
 # SKELETON: mounts + early USB only. Imported from init.rc via
-# `import /init.maple.rc` (TARGET_PROVIDES_INIT_RC=true ships our init.rc;
+# `import /init.${ro.hardware}.rc` (ro.hardware=maple), exactly once —
+# do NOT add a second explicit import (it used to double-parse this file
+# and spam ignored-duplicate errors for every service below).
 # the KitKat init.rc itself is still TODO — start from aosp-kitkat
 # system/core/rootdir/init.rc once synced, the way cooper's init.rc was
 # derived from Donut's).
 # Block paths: /dev/block/bootdevice/by-name/* (from TWRP
 # fstab_maple.recovery). VERIFY on stock before first boot.
+
+# Configfs USB gadget (adbd + usbudc services, sys.usb.config trigger).
+# WITHOUT this import the usbudc service is unknown to init and there is
+# no USB at all (regression seen 2026-10-15: this import lived only on
+# the build server and a repo→server sync dropped it).
+import /init.maple.usb.rc
 
 on early-init
     # MSM8998 USB gadget (DWC3, a800000.dwc3) — KitKat-era functionfs/adb
@@ -26,11 +34,10 @@ on init
     # for 11+ min). Policy audit is a later project; cooper precedent says
     # get the boot green first. TODO: re-enable + audit.
     setenforce 0
-    # Coldboot MUST finish before mounts: by-name symlinks + block nodes
-    # appear during ueventd coldboot, and do_mount fails SILENTLY (no kmsg)
-    # if the node isn't there yet. Stock KitKat has no wait here; maple
-    # (hundreds of uevents on yoshino) needs it.
-    wait_for_coldboot_done
+    # NOTE: no coldboot wait here: KitKat init has no
+    # `wait_for_coldboot_done` (invalid command, aborts the action) and the
+    # mounts below use RAW sda/sde nodes (stable GPT numbers, present
+    # without ueventd symlinks), so no wait is needed.
 
 # NOTE: each mount is its OWN `on init` action. A failing init command
 # aborts its action SILENTLY — one bad mount used to kill persist + all
@@ -40,6 +47,13 @@ on init
 # 2026-10-13: stable GPT partition numbers, no symlink timing involved):
 # system->sde46, cache->sda5, userdata->sda15, persist->sda4.
 # KitKat mount syntax: space-separated FLAGS, ONE trailing options arg.
+# /cache + /persist have NO ramdisk dirs from stock init.rc — create them
+# HERE, before the mounts: mount onto a missing dir fails ENOENT SILENTLY
+# (seen 2026-10-14: only /system + /data mounted, no /cache or /persist).
+on init
+    mkdir /cache 0770 system cache
+    mkdir /persist 0771 system system
+
 on init
     mount ext4 /dev/block/sde46 /system ro wait
 
@@ -89,8 +103,13 @@ on post-fs-data
 
     # the kernel resolves this from the requester's root, glrenderd's chroot has the a540 firmware there
     write /sys/module/firmware_class/parameters/path /vendor/firmware
-    # before surfaceflinger (class core, on boot), which waits for its socket
-    start glrenderd
+    # glrenderd NOT started by default: its uncoordinated FBIOPAN flips
+    # race SurfaceFlinger's and wedge the mdss overlay start (EBUSY ->
+    # panel frozen on the xboot splash; seen 2026-10-15). Pure SF+libagl
+    # is proven on the panel (correct UI twice). Start it live only for
+    # experiments (`adb shell start glrenderd`); re-architect the split
+    # (single flipper) before returning it to boot.
+    #start glrenderd
 
     # the clearpad driver doesn't finish probing (no touch events) until this, lineage does the same
     write /sys/devices/virtual/input/clearpad/post_probe_start 1
@@ -98,10 +117,20 @@ on post-fs-data
 on boot
     # Safety net: (re)start adbd now that init is up. No-op if running.
     start adbd
+    # Bind the configfs USB gadget unconditionally: the
+    # `on property:sys.usb.config=adb` trigger proved unreliable (it never
+    # fired on the first full-boot 2026-10-15 — UsbDeviceManager owns that
+    # property once system_server runs — so usbudc never started and there
+    # was no USB at all). usbudc.sh re-binds whenever unbound; harmless if
+    # the trigger already started it (second start is a no-op).
+    start usbudc
     start bootlog
-    # DIAG: auto-return to TWRP after 15 min (no adb to recover a stuck
-    # boot remotely). Remove once adb works.
-    start autowinch
+
+# NOTE: autowinch (auto-return to TWRP after 15 min) was removed
+# 2026-10-15 once USB adb worked — it kept killing every good boot.
+# If a future boot wedges with no adb, re-add:
+#   on boot: start autowinch
+#   service autowinch /sbin/autowinch.sh (user root, disabled, oneshot)
 
 # DIAG (test 7): no USB/adb yet (DWC3 needs functionfs bringup — later),
 # so capture logs to files for TWRP-side pull. Remove once adb works.
@@ -109,12 +138,6 @@ on boot
 service bootlog /system/bin/dump-boot-log.sh
     user root
     disabled
-
-# DIAG: auto-return to TWRP 15 min after boot. Remove once adb works.
-service autowinch /sbin/autowinch.sh
-    user root
-    disabled
-    oneshot
 
 # class main not late_start, late_start only fires from mount_all and the mounts here are by hand
 service sdcard /system/bin/sdcard -u 1023 -g 1023 -l /data/media /mnt/shell/emulated

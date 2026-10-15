@@ -1,8 +1,9 @@
 # init.rc for maple (KitKat 4.4.4) — AOSP system/core/rootdir/init.rc
-# plus `import /init.maple.rc` (GPT mounts, DWC3 adb gadget).
+# plus maple mounts/gadget via stock `import /init.${ro.hardware}.rc`
+# (ro.hardware=maple from androidboot.hardware). Single import only: a
+# duplicate `import /init.maple.rc` here used to spam kmsg with ignored
+# duplicate service definitions (bootlog/autowinch/sdcard/glrenderd).
 # Shipped to ramdisk root (TARGET_PROVIDES_INIT_RC=true).
-# NOTE: stock `import /init.${ro.hardware}.rc` ALSO loads init.maple.rc
-# (ro.hardware=maple from androidboot.hardware); double import is harmless.
 
 # Copyright (C) 2012 The Android Open Source Project
 #
@@ -13,7 +14,6 @@
 import /init.environ.rc
 import /init.usb.rc
 import /init.${ro.hardware}.rc
-import /init.maple.rc
 import /init.trace.rc
 
 on early-init

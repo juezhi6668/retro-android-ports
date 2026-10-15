@@ -49,6 +49,10 @@ TARGET_BOARD_PLATFORM_GPU := qcom-adreno540
 # the adreno 540 from lineage's chroot. see patches/kitkat/*glrenderd*
 BUILD_EMULATOR_OPENGL := true
 
+# kitkat only preopts user builds by default. without it first boot dexopts every jar and apk
+# on the phone, and the boot animation hides that for many minutes
+WITH_DEXPREOPT := true
+
 # BLOCKER #1 — 32-bit userspace on a 64-bit SoC:
 # KitKat (API 19) has NO arm64 support (TARGET_ARCH arm64 + TARGET_2ND_ARCH
 # landed in Lollipop 5.0). MSM8998 (Kryo 280) is ARM64. First-bringup path
