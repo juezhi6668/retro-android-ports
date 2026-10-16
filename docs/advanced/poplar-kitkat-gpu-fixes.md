@@ -1,7 +1,12 @@
-# KitKat GPU fixes — `glrenderd` (maple / poplar)
+# Poplar KitKat GPU fixes — `glrenderd` reference (maple / poplar)
+
+Sibling-port reference for the yoshino MSM8998 `glrenderd` work — developed on
+`poplar`, adopted by `maple`. See [glrenderd](software/glrenderd.md) (canonical
+writeup), [KitKat porting notes](porting-notes/kitkat.md), [maple quirks](../devices/maple/quirks.md),
+[poplar quirks](../devices/poplar/quirks.md).
 
 What makes hardware GL work under KitKat 4.4.4 on the yoshino MSM8998 devices —
-[maple](devices/maple.md) (XZ Premium) and [poplar](devices/poplar.md) (XZ1). Same SoC,
+[maple](../devices/maple/README.md) (XZ Premium) and [poplar](../devices/poplar/README.md) (XZ1). Same SoC,
 same 4.4 kernel, same Adreno 540, so **every fix is shared**; they were developed on
 poplar.
 

@@ -24,10 +24,10 @@ Contents:
   silently), `ueventd.poplar.rc`.
 - `lights/` — the `lights.poplar` HAL. Without a lights module the framework never
   blanks the panel and brightness does nothing (no lights HAL = no sleep and no wake).
-  **Not present in maple's tree.**
+  **Maple has since gained a dual-node (`lcd-backlight` + `wled`) variant — see
+  `docs/devices/poplar/quirks.md` divergence note before syncing.**
 - `displaytune.sh` — one-shot display fixups at boot, replacing the old keepawake
-  workaround that made "screen off" come straight back on. **Not present in maple's
-  tree.**
+  workaround that made "screen off" come straight back on.
 - `glrenderd.sh`, `clearpad.idc`, `gpio-keys.kl`, `autowinch.sh`, `dump-boot-log.sh`,
   overlay (emulated storage list, nav bar, density).
 
@@ -36,18 +36,17 @@ Reference (not in git, same policy as cooper blobs): Sony
 `BoardConfigPlatform.mk` (msm8998, base 0/pagesize 4096, boot 64 MB), kernel
 `sony/msm8998` (4.4, `Image.gz-dtb`).
 
-Sync into a checkout — `scripts/sync-device-tree.sh` has no `poplar` case yet, so this
-is what it would run:
+Sync into a checkout:
 
 ```sh
-rsync -a --delete devices/poplar/kitkat/ "$AOSP_DIR/vendor/sony/poplar/"
+scripts/sync-device-tree.sh poplar kitkat  # -> $AOSP_DIR/vendor/sony/poplar
 ```
 
 Build (inside the KitKat container/chroot): `lunch full_poplar-eng && make -j$(nproc)`.
 Device history, specs and blockers:
-[`docs/devices/poplar.md`](../../docs/devices/poplar.md).
-KitKat playbook: [`docs/porting-notes-kitkat.md`](../../docs/porting-notes-kitkat.md);
-GPU fixes: [`docs/kitkat-gpu-fixes.md`](../../docs/kitkat-gpu-fixes.md).
+[`docs/devices/poplar/`](../../docs/devices/poplar/README.md).
+KitKat playbook: [`docs/advanced/porting-notes/kitkat.md`](../../docs/advanced/porting-notes/kitkat.md);
+GPU fixes: [`docs/advanced/poplar-kitkat-gpu-fixes.md`](../../docs/advanced/poplar-kitkat-gpu-fixes.md).
 
 ### poplar vs maple
 
@@ -59,7 +58,7 @@ Same tree shape. What differs:
 | boot / system | `sda38` / `sda65` | `sde35` / `sde46` |
 | userdata / cache / persist | `sda66` / `sda53` / `sda33` | `sda15` / `sda5` / `sda4` |
 | density | 430 | 410 |
-| extras | `lights/`, `displaytune.sh` | — |
+| extras | `lights/`, `displaytune.sh` | dual-node `lights/`, no `displaytune.sh` (see quirks for direction) |
 
 poplar's `usbudc.sh` also (re)builds the gadget rather than only binding the UDC, and
 its `init.*.usb.rc` splits the gadget bring-up into separate actions. A fix on one

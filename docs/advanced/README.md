@@ -17,7 +17,7 @@ generalize across devices of that era.
 | Release | AOSP branch | Notes | Ported to |
 | --- | --- | --- | --- |
 | Donut 1.6 | `android-1.6_r2` (DRD35) | [porting-notes/donut.md](porting-notes/donut.md) | [cooper](../devices/cooper/README.md) |
-| KitKat 4.4.4 | `android-4.4.4_r2` (KTU84Q) | [porting-notes/kitkat.md](porting-notes/kitkat.md) | [maple](../devices/maple/README.md) |
+| KitKat 4.4.4 | `android-4.4.4_r2` (KTU84Q) | [porting-notes/kitkat.md](porting-notes/kitkat.md) | [maple](../devices/maple/README.md), [poplar](../devices/poplar/README.md) |
 
 Planned playbooks (not written yet — they land with the first port of each
 release): Eclair, Froyo, Gingerbread, Ice Cream Sandwich, Jelly Bean (4.1–4.3),
@@ -30,7 +30,9 @@ Step-by-step, from a pristine AOSP checkout to a flashable image:
 - [Building Donut 1.6 for cooper](build/donut.md) — Hardy i386 chroot,
   JDK 5, GCC 4.2.3, cooper BML packaging.
 - [Building KitKat 4.4.4 for maple](build/kitkat.md) — Trusty/JDK 6
-  container, prebuilt 4.4 kernel, simg2img/TWRP flashing, glrenderd.
+  container, prebuilt 4.4 kernel, simg2img/TWRP flashing, glrenderd
+  (same steps for `poplar` with the block-map/panel deltas in
+  [poplar quirks](../devices/poplar/quirks.md)).
 - [Build server runbook](build-server.md) — layout, footguns and flash
   workflow when building on a remote host.
 
@@ -49,3 +51,6 @@ Step-by-step, from a pristine AOSP checkout to a flashable image:
 - [charquirks-mapping.md](charquirks-mapping.md) — how a sister port's
   4.2-on-pdx203 notes map onto maple/KitKat (what was independently
   converged, what applied, what is queued).
+- [poplar-kitkat-gpu-fixes.md](poplar-kitkat-gpu-fixes.md) — sibling XZ1
+  (`poplar`) GPU/display fix reference (developed on poplar, adopted by
+  maple); canonical writeup is [glrenderd](software/glrenderd.md).

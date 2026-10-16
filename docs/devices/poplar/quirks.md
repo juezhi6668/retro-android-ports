@@ -1,15 +1,23 @@
-# KitKat 4.4.4 on the Sony Xperia XZ1 (poplar)
+# poplar quirks (Sony Xperia XZ1)
 
-Device-specific notes for the poplar port. KitKat playbook:
-[`docs/porting-notes-kitkat.md`](../porting-notes-kitkat.md); Donut/cooper method
-reference: [`docs/porting-notes.md`](../porting-notes.md) +
-[`docs/devices/cooper.md`](cooper.md); sibling device: [`maple.md`](maple.md).
+KitKat 4.4.4 on `poplar` (sibling yoshino/MSM8998 device to `maple`).
+Start with the [device page](README.md), then the [KitKat porting notes](../../advanced/porting-notes/kitkat.md)
+and [Building KitKat](../../advanced/build/kitkat.md).
 
 Status: **BOOTED, daily-drivable (Oct 2026)** — full KitKat userspace on the Sony 4.4
 kernel: `sys.boot_completed=1`, launcher + nav bar at 1080x1920, touch, USB adb, and
 hardware GL on the Adreno 540 via `glrenderd`
-([`docs/kitkat-gpu-fixes.md`](../kitkat-gpu-fixes.md)). Open: no
+([poplar GPU fixes](../../advanced/poplar-kitkat-gpu-fixes.md)). Open: no
 cellular/audio/camera/GPS/WiFi/BT, and the renderer still stalls under sustained load.
+Donut/cooper method reference: [Donut porting notes](../../advanced/porting-notes/donut.md);
+sibling device: [maple quirks](../maple/quirks.md).
+
+- **Divergence warning (verified 2026-10-16).** This tree as committed predates maple
+  TEST 36–37 — it lacks the wifi supplicant/p2p/dhcpcd services + `/data/misc/wifi`
+  dirs, the `boot_adsp` + firmware staging for audio, the dual-node (`lcd-backlight`
+  + `wled`) lights HAL, and `service_locator.enable=0`. Do not treat poplar init/
+  BoardConfig as newer than maple; forward-port from `devices/maple/kitkat/` and
+  re-verify by readback.
 
 ## Hardware
 
@@ -100,7 +108,7 @@ All of it lives in the boot image (`make bootimage`) — none of it is `adb push
   `clearpad.idc` + `gpio-keys.kl` (identical to maple).
 - dispatch: a dead renderer freezes composition, and a stuck `InputDispatcher`
   (`DispatchFrozen: 1`) is a second, independent freeze — 10 s self-thaw, see
-  [`docs/kitkat-gpu-fixes.md`](../kitkat-gpu-fixes.md).
+  [poplar GPU fixes](../../advanced/poplar-kitkat-gpu-fixes.md).
 
 ## Verified on device
 
