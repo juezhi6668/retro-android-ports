@@ -1,5 +1,10 @@
 # Build server runbook (maple/KitKat)
 
+Remote-host companion to [Building KitKat 4.4.4 for maple](build/kitkat.md);
+back to the [advanced index](README.md). Generic layout, footguns and flash
+workflow below — private host/user details come from `AGENTS.local.md` or
+your own notes.
+
 Machine: `androd-buildtest`, Ubuntu 26.04, 6 cores / 15 GB RAM / ~390 GB
 disk. Reachable over Tailscale as `BUILD_USER@BUILD_HOST` (see your own
 notes for the current address — it has moved before; `tailscale status`
@@ -56,7 +61,7 @@ short client timeout, IGNORE the timeout, then verify with a fresh call
 - `make servicemanager systemimage`-style targets speed up iterations;
   full `make -j6` after UAPI/bionic changes (~1 h, touches everything).
 - `TARGET_NO_KERNEL` is NOT yet set — set it (plus formalize the three
-  patch sets) once server access returns; see maple.md pending list.
+  patch sets) once server access returns; see the maple quirks pending list.
 
 ## Flash workflow (phone side, from the Linux workstation)
 

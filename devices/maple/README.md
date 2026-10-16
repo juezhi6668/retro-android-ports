@@ -20,9 +20,9 @@ Contents:
   USB gadget safety nets), `init.maple.usb.rc` + `usbudc.sh` (DWC3 adb
   gadget bringup), `ueventd.maple.rc` (node ownership).
 - `glrenderd.sh`, `clearpad.idc`, `gpio-keys.kl`, overlay (emulated
-  storage list, nav bar, density) — see `docs/devices/maple.md` for
-  what works (touch/display/adb) and what's stub (glrenderd off,
-  wifi/BT/RIL/camera).
+  storage list, nav bar, density) — see `docs/devices/maple/quirks.md` for
+  what works (boot, touch, display, adb, hardware GL via glrenderd) and
+  what's still open (audio/WiFi/RIL/camera).
 
 Reference (not in git, same policy as cooper blobs): Sony
 `android_device_sony_maple` (`ten` branch) + `yoshino-common`
@@ -38,9 +38,11 @@ scripts/sync-device-tree.sh maple kitkat  # -> $AOSP_DIR/vendor/sony/maple
 
 Build (once filled in, inside the KitKat container/chroot):
 `lunch full_maple-eng && make -j$(nproc)`.
-Device history, specs, and blockers:
-[`docs/devices/maple.md`](../../docs/devices/maple.md).
-KitKat playbook: [`docs/porting-notes-kitkat.md`](../../docs/porting-notes-kitkat.md).
+Device page, status and bringup log:
+[`docs/devices/maple/`](../../docs/devices/maple/README.md); build guide:
+[`docs/advanced/build/kitkat.md`](../../docs/advanced/build/kitkat.md);
+KitKat playbook:
+[`docs/advanced/porting-notes/kitkat.md`](../../docs/advanced/porting-notes/kitkat.md).
 
 ### Why `TARGET_BOARD_PLATFORM` is still open
 

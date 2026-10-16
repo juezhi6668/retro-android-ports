@@ -1,0 +1,51 @@
+# Advanced documentation
+
+Everything beyond the device main pages: the per-release porting notes and
+build guides, the build-server runbook, and the software this project
+writes to make old Android run on newer hardware.
+
+New here? Start with the [main README](../../README.md). Device main pages
+(description, per-release status) and quirks pages live in
+[`docs/devices/`](../devices/).
+
+## Porting notes, per Android release
+
+The generic playbook for a release: source/toolchain, build-system
+surprises, init/Edify/ABI differences, and the field lessons that
+generalize across devices of that era.
+
+| Release | AOSP branch | Notes | Ported to |
+| --- | --- | --- | --- |
+| Donut 1.6 | `android-1.6_r2` (DRD35) | [porting-notes/donut.md](porting-notes/donut.md) | [cooper](../devices/cooper/README.md) |
+| KitKat 4.4.4 | `android-4.4.4_r2` (KTU84Q) | [porting-notes/kitkat.md](porting-notes/kitkat.md) | [maple](../devices/maple/README.md) |
+
+Planned playbooks (not written yet — they land with the first port of each
+release): Eclair, Froyo, Gingerbread, Ice Cream Sandwich, Jelly Bean (4.1–4.3),
+Lollipop, Marshmallow, Nougat.
+
+## Build guides, per Android release
+
+Step-by-step, from a pristine AOSP checkout to a flashable image:
+
+- [Building Donut 1.6 for cooper](build/donut.md) — Hardy i386 chroot,
+  JDK 5, GCC 4.2.3, cooper BML packaging.
+- [Building KitKat 4.4.4 for maple](build/kitkat.md) — Trusty/JDK 6
+  container, prebuilt 4.4 kernel, simg2img/TWRP flashing, glrenderd.
+- [Build server runbook](build-server.md) — layout, footguns and flash
+  workflow when building on a remote host.
+
+## Project software
+
+- [vtouch](software/vtouch.md) — multi-touch to single-touch input proxy;
+  makes multi-touch panels work on pre-multitouch releases (Donut 1.6).
+- [glrenderd](software/glrenderd.md) — runs a newer GPU driver (Adreno in
+  a Lineage chroot) under an old Android, with the guest using the
+  emulator GL stack as transport.
+- [mkbootimg-cooper](software/mkbootimg-cooper.md) — pagesize-patched
+  Donut `mkbootimg` that can pack cooper's boot.img.
+
+## Reference notes
+
+- [charquirks-mapping.md](charquirks-mapping.md) — how a sister port's
+  4.2-on-pdx203 notes map onto maple/KitKat (what was independently
+  converged, what applied, what is queued).

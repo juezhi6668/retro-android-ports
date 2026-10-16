@@ -1,6 +1,8 @@
 # patches/donut
 
 Changes this port makes to a pristine AOSP Donut (`android-1.6_r2`) checkout.
+Step-by-step build: [`docs/advanced/build/donut.md`](../../docs/advanced/build/donut.md);
+field lessons: [`docs/advanced/porting-notes/donut.md`](../../docs/advanced/porting-notes/donut.md).
 Each `.patch` is a `git diff` against the named repo project, applied from
 that project's root:
 

@@ -6,9 +6,9 @@
 #
 # This image provides the toolchain baseline only (Trusty packages + JDK 6
 # + repo). The AOSP tree itself is bind-mounted, never baked in — same
-# separation as /srv/donut-hardy (see docs/porting-notes.md).
+# separation as /srv/donut-hardy (see docs/advanced/porting-notes/donut.md).
 # Status: UNTESTED recipe (no KitKat sync has run yet). Log deviations in
-# docs/porting-notes-kitkat.md as they are hit.
+# docs/advanced/porting-notes/kitkat.md as they are hit.
 
 FROM ubuntu:14.04
 

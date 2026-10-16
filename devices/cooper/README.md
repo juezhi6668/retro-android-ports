@@ -32,5 +32,6 @@ scripts/sync-device-tree.sh cooper donut        # -> $AOSP_DIR/vendor/samsung/co
 
 Build (inside the Hardy chroot): `lunch full_cooper-eng && make -j8`.
 Package: `scripts/build-cooper-donut-full.py` (or `...-skeleton.py` for the
-small preview zip). Device history and pitfalls:
-[`docs/devices/cooper.md`](../../docs/devices/cooper.md).
+small preview zip). Device page and quirks:
+[`docs/devices/cooper/`](../../docs/devices/cooper/README.md); build guide:
+[`docs/advanced/build/donut.md`](../../docs/advanced/build/donut.md).

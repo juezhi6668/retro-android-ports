@@ -1,7 +1,11 @@
 # patches/kitkat
 
 Changes this port makes to a pristine AOSP KitKat (`android-4.4.4_r2`)
-checkout. Same layout as [`patches/donut/`](../donut/README.md): each
+checkout. Step-by-step build:
+[`docs/advanced/build/kitkat.md`](../../docs/advanced/build/kitkat.md);
+field lessons:
+[`docs/advanced/porting-notes/kitkat.md`](../../docs/advanced/porting-notes/kitkat.md).
+Same layout as [`patches/donut/`](../donut/README.md): each
 `.patch` is a `git diff` against the named repo project, applied from that
 project's root:
 

@@ -1,17 +1,24 @@
-# Porting notes: ancient Android on newer hardware
+# Porting notes: Donut 1.6 on newer hardware
 
-Playbook distilled from bringing AOSP Donut (`android-1.6_r2`, DRD35) up on a
-Samsung Galaxy Ace GT-S5830 (`cooper`, 2011, MSM7227) with a modern Arch host.
-Everything below applies to any attempt to build/run Donut on post-2009
-hardware. Device-specific notes live in `docs/devices/<codename>.md`
-(cooper: [`docs/devices/cooper.md`](devices/cooper.md)).
-For the KitKat-era delta (4.4.4 on newer hardware, e.g. maple), see
-[`docs/porting-notes-kitkat.md`](porting-notes-kitkat.md).
+Playbook distilled from bringing AOSP Donut (`android-1.6_r2`, DRD35) up
+on a Samsung Galaxy Ace GT-S5830 (`cooper`, 2011, MSM7227) with a modern
+Arch host. Everything below applies to any attempt to build/run Donut on
+post-2009 hardware; cooper-specific facts live in the
+[cooper quirks](../../devices/cooper/quirks.md), the step-by-step build in
+[build/donut.md](../build/donut.md). For the KitKat-era delta (4.4.4 on
+newer hardware, e.g. maple), see [porting-notes/kitkat.md](kitkat.md).
+Back to the [advanced index](../README.md).
 
 ## Source & toolchain
 - **Cupcake is gone from AOSP.** `platform/manifest` has no `cupcake` /
-  `android-1.5` branch left, only `android-1.6_r1…` and later. Donut is the
-  oldest thing you can still `repo init`.
+  `android-1.5` branch left, only `android-1.6_r1…` and later, so
+  `repo init -b cupcake` is impossible and Donut is the oldest thing you
+  can still check out. (This is why the project starts at Donut; custom
+  1.5 builds are out of scope.)
+- **Donut on post-2009 hardware is a natural fit.** It builds `armeabi`
+  (armv5te), which runs on ARMv6 SoCs like cooper's MSM7227; its HVGA-era
+  UI matches the 320×480 class of 2010–2012 phones, making those a good
+  candidate pool for more Donut ports.
 - **Java 5 is mandatory** (`build/core/main.mk` greps for 1.5). Modern JDKs
   can't even target 1.5 bytecode. Only practical route: a period chroot.
 - **Host GCC is too new** for Donut's host tools (`apriori` etc. die on

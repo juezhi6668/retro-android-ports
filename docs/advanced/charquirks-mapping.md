@@ -1,9 +1,13 @@
-# CHARQUIRKS mapping (friend's 4.2-on-pdx203 port → maple KitKat)
+# CHARQUIRKS mapping (sister 4.2-on-pdx203 port → maple KitKat)
 
-Source: CHARQUIRKS.md (4.2.2 on Xperia 1 II, SD865, kernel 4.19). Read
-2026-10-14. Below: what we independently converged on (validates our path),
-what applies to our CURRENT stall, and what's queued for later phases.
-Maple differences that change the advice are called out.
+Reference notes: how a sister port's `CHARQUIRKS.md` (Android 4.2.2 on the
+Xperia 1 II, SD865, kernel 4.19; a private document, not in this
+repository) maps onto maple/KitKat. Read 2026-10-14. Below: what we
+independently converged on (validates our path), what applied to our stall
+at the time, and what is queued for later phases. Current status:
+[maple quirks](../devices/maple/quirks.md); generic lessons:
+[KitKat porting notes](porting-notes/kitkat.md). Back to the
+[advanced index](README.md).
 
 ## Independently converged (validates our approach)
 
@@ -112,14 +116,31 @@ Maple differences that change the advice are called out.
 
 - Subsystem defaults (SYSTEM restart / modem PANIC) must be set to
   RELATED/NOP first or a dsp/modem crash panics the phone.
+  → DONE for adsp/slpi in TEST 36 (`init.maple.rc` writes RELATED to
+  subsys4/5 on post-fs-data; all 7 read SYSTEM live 2026-10-16). Modem
+  deliberately left alone (never boots here; no crash source).
 - Modem errfatal ~40s pattern known; expect a fight. GPS blocked on modem.
 - `service_locator.enable=0` on cmdline (with =1 their audio card took
-  ~5 min to register). OURS currently has =1 from the Lineage boot.img
-  cmdline — consider flipping to 0 at the next cmdline edit.
+  ~5 min to register). → DONE in TEST 36 (BoardConfig flipped 1→0;
+  verify-me: tavil card probes after reflash).
 - WiFi: their 4.2 used wpa_supplicant_8 + nl80211 + lib_driver_cmd_qcwcn
   with `BOARD_WLAN_DEVICE` UNSET (qcwcn turns on p2p; they run plain
-  `wpa_supplicant` + `wifi.interface=wlan0`). Matches our linkable-but-
-  unwired state; revisit driver load then.
+  `wpa_supplicant` + `wifi.interface=wlan0`). Maple keeps qcwcn (KitKat's
+  driver_nl80211 NEEDS the private lib to link — static, so no .so on
+  device) and defines both supplicant services, framework chooses;
+  `wifi.direct.xml` still not shipped (same posture). Maple wifi chip is
+  WCN3990/cherokee via built-in qca_cld3 (NOT BCM43xx — corrected from
+  `/proc/config.gz` + BT tlv names), `gIPAConfig=0` in the new ini
+  (ipa_smmu_wlan can't alloc its iommu domain live). Driver loads
+  (v5.1.1.77V, /dev/wlan chr 229,0) but no wlan0/phy — WLFW/QMI handshake
+  likely modem-gated. TEST 36 has the full inventory.
+- Audio: tinyalsa `audio.primary.maple` written for the port in TEST 36
+  (speaker = `speaker` + deep-buffer MM1/pcm0, mic = `handset-mic`/dmic1
+  + MM1/pcm0, DEC7 104, no acdb, silent-safe pre-probe) with
+  `mixer_paths_tasha.xml`, `audio_policy.conf`, `libsrec_jni`. Card-side
+  fix first: `qcom,wcn-btfm` stripped from all 4 DTBs (their
+  `qcom,wcn-bt = <0>`), adsp firmware staging next (modem `image/adsp.*`
+  inventoried live; blobs stay out-of-git like the kernel).
 
 ## Queued: debug hygiene (applies now)
 

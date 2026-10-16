@@ -1,9 +1,12 @@
-# Donut 1.6 on the Samsung Galaxy S5830 (cooper)
+# cooper quirks (Samsung Galaxy Ace GT-S5830/L/T)
 
-Device-specific notes for the cooper port — the generic playbook lives in
-[`docs/porting-notes.md`](../porting-notes.md). Covers GT-S5830/L/T
-(`cooper`); the Broadcom GT-S5830i (`cooperve`) is a different SoC entirely
-and is NOT covered.
+Everything needed to port to cooper: the Samsung BML/FSR/STL flash stack,
+kernel pairing, audio, touchscreen, recovery interaction, and the verified
+bringup history. Status, releases and links live on the
+[device main page](README.md); the generic playbook is the
+[Donut porting notes](../../advanced/porting-notes/donut.md). Covers
+GT-S5830/L/T; the Broadcom GT-S5830i (`cooperve`) is a different SoC
+entirely and is NOT covered.
 
 ## Platform specifics
 
@@ -190,10 +193,11 @@ and is NOT covered.
   under load; low-voltage boots produce phantom failures), and never flash
   boot below ~50%.
 
-## Status
-`aosp-donut/` (Donut r2 + `devices/cooper/donut` device port, incl. cooper
-libaudio + 160 dpi) builds `full_cooper-eng` in `/srv/donut-hardy` (Hardy
-chroot); `scripts/build-cooper-donut-full.py` packs
+## Status (build + bringup history)
+Feature matrix: see the [device main page](README.md). `aosp-donut/`
+(Donut r2 + `devices/cooper/donut` device port, incl. cooper libaudio +
+160 dpi) builds `full_cooper-eng` in `/srv/donut-hardy` (Hardy chroot);
+`scripts/build-cooper-donut-full.py` packs
 `out/full_cooper-*-FULL-*.zip` (CWM/TWRP-flashable, BML-aware).
 **MILESTONE 2026-10-12: full boot to the Donut home screen on-device,
 touchscreen + capacitive keys working**, display via software rendering at

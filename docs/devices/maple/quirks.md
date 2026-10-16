@@ -1,17 +1,18 @@
-# KitKat 4.4.4 on the Sony Xperia XZ Premium (maple)
+# maple quirks (Sony Xperia XZ Premium G8141/G8142)
 
-Device-specific notes for the maple port — the generic KitKat playbook
-lives in [`docs/porting-notes-kitkat.md`](../porting-notes-kitkat.md).
-The Donut/cooper playbook
-([`docs/porting-notes.md`](../porting-notes.md),
-[`docs/devices/cooper.md`](cooper.md)) is the method reference; this doc
-is the maple delta.
+Everything needed to port to maple: hardware snapshot, flash layout,
+kernel, blocker list, and the full TEST 1–37 bringup log with verified
+fixes. Status, releases and links live on the
+[device main page](README.md); the generic KitKat playbook is the
+[KitKat porting notes](../../advanced/porting-notes/kitkat.md), with the
+[Donut playbook](../../advanced/porting-notes/donut.md) +
+[cooper quirks](../cooper/quirks.md) as the method reference.
 
-Status: **BOOTED 2026-10-15** — full KitKat userspace on the 4.4 kernel:
+Current state: **BOOTED 2026-10-15** — full KitKat userspace on the 4.4 kernel:
 `sys.boot_completed=1`, 75 binder services, Launcher compositing at
 1080x1920, working touch, USB adb (`18d1:4ee7`). **Hardware-accelerated
 GL/GLES verified 2026-10-15** (Adreno 540 via glrenderd, GLES 3.2). The
-tree in [`devices/maple/kitkat/`](../../devices/maple/kitkat/) is a
+tree in [`devices/maple/kitkat/`](../../../devices/maple/kitkat/) is a
 commented, boot-verified device tree. Remaining gaps (no
 cellular/audio/camera/WiFi yet — same documented-limitations posture as
 cooper early on) are tracked at the bottom; blockers 1–4 below are all
@@ -90,7 +91,7 @@ kernel `4.4.302-whatawurst+` aarch64, 8× Kryo (4×0x801 + 4×0x800), platform
 - Kernel image format `Image.gz-dtb` postdates KitKat's mkbootimg. Expect a
   mkbootimg backport (precedent:
   `patches/donut/mkbootimg-pagesize.patch`; see
-  `docs/porting-notes-kitkat.md`).
+  `docs/advanced/porting-notes/kitkat.md`).
 
 ### Blocker list (all resolved 2026-10-15 — kept for the record)
 
@@ -129,11 +130,12 @@ kernel `4.4.302-whatawurst+` aarch64, 8× Kryo (4×0x801 + 4×0x800), platform
 - Every flash verified by readback (cooper BML rule, applies to fastboot too).
 - Provisioning/`device_provisioned`, keymaps, `TARGET_PROVIDES_INIT_RC`,
   updater-script arities — all re-audited for KitKat in
-  `docs/porting-notes-kitkat.md` (KitKat Edify has `run_program` + ext4
+  `docs/advanced/porting-notes/kitkat.md` (KitKat Edify has `run_program` + ext4
   `format`, unlike Donut — easier than cooper here).
 - Keep blobs out of git (`.gitignore` covers `aosp-kitkat/`, `out/`, `work/`).
 
-## Status
+## Bringup log and next actions
+Feature matrix and release status: [device main page](README.md).
 
 Boots to UI with touch + adb (2026-10-15 — see TEST 24–29 for the
 bringup log). Latest (TEST 33, 2026-10-16): the poplar reliability set +
@@ -822,3 +824,137 @@ Next actions (checkboxes for the log):
         + compose/wait ≈ 18–26 ms). The async experiment showed the readback
         can't be trivially hidden; next candidates (not done) are the
         app-side v2-surface op instrumentation and the guest fence/queue path.
+- [ ] TEST 36 (wifi + audio bringup, 2026-10-16, IN PROGRESS): owner asked
+      for wifi and audio using `reference/CHARQUIRKS.md` (the pdx203 4.2
+      port). Live diagnosis first, tree changes second; nothing below is
+      on-device verified yet except where marked LIVE.
+      - LIVE facts (adb, `maplekk device`, `sys.boot_completed=1`):
+        audio: `/proc/asound/cards` = "--- no soundcards ---", `/dev/snd/`
+        holds only `timer`, `dmesg` shows "No soundcards found" with ZERO
+        tavil/tasha/wcd/slim/qdsp probe lines (only TDM DAIs probe) and an
+        empty `/sys/kernel/debug/asoc/{codecs,dais,platforms}` — the machine
+        driver is silently deferring. DT has BOTH `sound-tavil`
+        (`qcom,model=msm8998-tavil-snd-card`, the real card) and
+        `sound-9335`, each with boolean `qcom,wcn-btfm` (0-byte prop) and
+        `qcom,wsa-devs` (16 B) + `qcom,wsa-max-devs`; codecs sit under
+        `slim@171c0000` (tavil_codec/tasha_codec), wcn3990 under
+        `slim@17240000`. Running kernel (`/proc/config.gz`,
+        `4.4.302-whatawurst+` Nov 2024) has everything built in
+        (`CONFIG_SND_SOC_MSM8998=y`, WCD9335+WCD934X, WSA881X, QDSP6V2,
+        APRV2_GLINK, PDR, `CONFIG_MSM_SERVICE_LOCATOR=y`,
+        `CONFIG_QCA_CLD_WLAN=y` built-in — the lineage-17.1 defconfig's
+        `=m` is stale). `service_locator.enable=1` on cmdline;
+        `audio_notifer_reg_service: SSR_MODEM is in use`; all 7
+        msm_subsys (ipa_fws venus spss a540_zap adsp slpi modem) at
+        SYSTEM; `/system/vendor/firmware` holds only glr-staged a5xx GPU
+        fw; no ADSP PIL load ever attempted (only a540_zap at 5.14 s).
+        wifi: qca_cld3 built in, driver v5.1.1.77V loaded,
+        `/dev/wlan` chr 229,0, `/sys/module/wlan/parameters/fwpath`
+        present-but-empty — but NO wlan0, NO `/sys/class/ieee80211` phy,
+        empty `/proc/net/wireless`. `wlan.driver.status=unloaded`,
+        supplicant never ran. Root causes in userspace (both fixed in
+        tree): (a) `/data/misc/wifi/sockets` + `/data/misc/dhcp` never
+        created (only softap.conf existed); (b) NO `wpa_supplicant` /
+        `p2p_supplicant` / `dhcpcd_*` services defined anywhere, so
+        wifi.c's `ctl.start wpa_supplicant` was a silent no-op.
+        `lib_driver_cmd_qcwcn` is STATIC (linked into wpa_supplicant —
+        its absence from `/system/lib` is correct, not a bug).
+        `echo ON > /dev/wlan` creates no interface; manual
+        wpa_supplicant exits silently with no wiphy (needs the WLFW/QMI
+        firmware handshake first — modem-side `wlanmdsp.mbn` exists on
+        the modem partition but the modem never boots here).
+        Modem partition (vfat `image/`, mounted ro live) carries
+        `adsp.*`, `bdwlan.*` (+`.bin`), `cpe/wcd`, `slpi_v*`, `venus.*`,
+        `wlanmdsp.mbn`; bluetooth partition carries cherokee BT
+        (`crbtfw*.tlv`/`crnv*.bin`); `/persist/wlan/wlan_mac.bin`
+        (32 B) exists. `dmesg` also shows
+        `ipa_smmu_wlan_cb_probe: could not alloc iommu domain` (hence
+        `gIPAConfig=0` in the new ini).
+      - Tree changes (this change, build + flash + verify pending):
+        wifi `init.maple.rc` gains the sockets/dhcp dirs, both
+        supplicant services + `dhcpcd_*` (hammerhead pattern, class main
+        since late_start never fires without mount_all), and RELATED
+        writes for adsp/slpi (subsys4/5 — order verified live);
+        `service_locator.enable=0` in BoardConfig (CHARQUIRKS audio:
+        with =1 the card took ~5 min via pdr, cmdline sets 0);
+        BoardConfig wifi comment corrected (WCN3990/cherokee qca_cld3,
+        NOT BCM43xx — proven by `/proc/config.gz` + BT tlv names) with
+        the CHARQUIRKS `BOARD_WLAN_DEVICE` divergence recorded (qcwcn
+        stays: KitKat's driver_nl80211 needs the private lib to LINK);
+        new `vendor/sony/maple/wifi/` (`WCNSS_qcom_cfg.ini` minimal
+        with `gIPAConfig=0`, both `*_overlay.conf` stubs) and
+        `vendor/sony/maple/audio/` (`audio_policy.conf`,
+        `mixer_paths_tasha.xml` from sony-msm8998 ten,
+        `audio.primary.maple` tinyalsa HAL: speaker = `speaker` +
+        deep-buffer MM1/pcm0, mic = `handset-mic`/dmic1 + MM1/pcm0,
+        DEC7 104 (+20 dB, no acdb), silent-safe while the card is
+        absent, `libsrec_jni` added for sound recorder);
+        `scripts/patch-maple-dtb.py` now also strips boolean
+        `qcom,wcn-btfm` (CHARQUIRKS `qcom,wcn-bt = <0>` translated —
+        verified on the real blob: all 4 DTBs -38 B, mdss fix intact,
+        tavil model intact, idempotent). Firmware blobs (adsp.*,
+        bdwlan.*, wlan_mac.bin) intentionally NOT in git (same
+        out-of-git policy as the kernel blob) — extraction + staging
+        is the next step after this image boots.
+      - NEXT (verify-me, in order): (1) card probes after reflash
+        (`/proc/asound/cards` shows tavil; if still absent, WSA881x
+        deferral is the next suspect — DT carries wsa-devs/max-devs and
+        NO wsa/swr probe line exists); (2) speaker + mic through the
+        new HAL; (3) `setprop ctl.start wpa_supplicant` path once the
+        WLFW firmware question is answered (may be modem-gated — the
+        modem never boots on this port, same wall as cellular/GPS).
+      - SETBACK 2026-10-16 (fixed same session): first boot with the new
+        HAL + policy crash-looped mediaserver (SIGSEGV fault addr 0 at
+        `AudioFlinger.cpp:1349`, `loadHwModule` → pc 0 in 10 tombstones;
+        `init.svc.media=restarting`, no boot_completed). Root cause: the
+        HAL never set `init_check` (or any stream getters) — every
+        framework-reachable op must be assigned, see the new playbook
+        lesson. Fix: full ops tables in `audio_hw.c` (device + both
+        stream commons + out/in specifics, `-ENOSYS`/neutral defaults),
+        mirroring the generic stub. HAL-only rebuild + live push.
+      - VERIFIED 2026-10-16 (after the fix, single reboot): fixed HAL
+        live-pushed, `sys.boot_completed=1`, `init.svc.media=running`,
+        mediaserver pid stable 5+ min, no new tombstones. `boot.img`
+        verified live: `service_locator.enable=0` in `/proc/cmdline`,
+        `wcn-btfm` gone in all 4 DTBs, init-created
+        `/data/misc/wifi/{sockets,wpa_supplicant.conf,entropy.bin}`.
+        `setprop ctl.start wpa_supplicant` now resolves (`stopped`
+        after the oneshot exits — previously blank/unknown); it exits
+        because wlan0 still doesn't exist (WLFW handshake, next step).
+        Card still `--- no soundcards ---` (kernel workstream), wlan0
+        still absent (WLFW/modem question).
+      - FOLLOW-UP 2026-10-16 (same session, owner report: no dialer or
+        volume-key sound, no Wi-Fi in Settings): both explained live.
+        Audio: AudioFlinger runs OUR primary output (dumpsys: 48000 Hz
+        output thread, HAL frame count 1024; policy dump shows our
+        rates) — the chain is complete to the HAL's silent-safe discard,
+        so silence is exactly the missing kernel card, nothing more.
+        Wi-Fi: `/system/etc/permissions` shipped NO feature xmls at all,
+        so PackageManager hid Wi-Fi from Settings; added
+        `android.hardware.wifi.xml` (frameworks source, one
+        PRODUCT_COPY_FILES line — no p2p xml per the CHARQUIRKS
+        posture). After push + reboot the feature is granted and the
+        whole toggle path fires: `svc wifi enable` → WifiStateMachine
+        DeviceActiveState → wifi.c → `wpa_supplicant` oneshot runs and
+        exits (no wlan0). Settings shows Wi-Fi now; scans/connects wait
+        on the kernel interface.
+      - TEST 37 (SKIP_QMI experiment, 2026-10-16): `icnss.quirks=388`
+        (SKIP_QMI + defaults) baked into a test boot.img to force the
+        HDD probe without the QMI WLFW handshake. Result: bootloop at
+        the Sony logo (pre-userspace, kernel panic class) — recovered
+        via TWRP by reflashing the previous boot.img (`boot-test36.img`
+        in `/data/media`, md5-verified `c31321cb…` on-device, warm
+        reboot back to `boot_completed=1`). Lesson: the bypass ENGAGES
+        (probe runs at boot) but crashes without QMI-provided setup;
+        capturing the panic needs pstore across the loop (not done).
+        Cmdline flag reverted in-tree. Remaining wifi paths: cnss-daemon
+        in a 64-bit Lineage chroot (real QMI handshake), or modem boot.
+      - Audio DSP stall (TEST 36 follow-up): with the tasha card up and
+        all 24 speaker controls verified SET via a static `tone_test`
+        build (`tools/tone_test.c`, NDK r21e armv7a, static tinyalsa),
+        playback sticks at PREPARED with `msm_pcm_playback_copy:
+        wait_event_timeout` — ADSP ONLINE but returns no buffers.
+        Prime suspect: the audio protection domain (no pd-mapper/
+        adsprpcd on this port; Lineage ships both plus rmt_storage and
+        tftp_server). No new tombstones from the probe (the one new
+        tombstone is a toolbox `ls|grep` SIGPIPE, known noise).

@@ -2,10 +2,12 @@
 
 Playbook for bringing AOSP KitKat (`android-4.4.4_r2`, KTU84Q, API 19) up
 on post-2014 hardware. Started for the Sony Xperia XZ Premium (`maple`,
-2017, MSM8998); device specifics live in
-[`docs/devices/maple.md`](devices/maple.md). The Donut playbook
-([`docs/porting-notes.md`](porting-notes.md)) is the method reference —
-this doc is the KitKat delta. **Everything below the "Field lessons" header is boot-verified on maple
+2017, MSM8998); device quirks (incl. the TEST 1–37 bringup log) live in
+the [maple quirks](../../devices/maple/quirks.md), the step-by-step build
+in [build/kitkat.md](../build/kitkat.md). The [Donut playbook](donut.md)
+is the method reference — this doc is the KitKat delta. Back to the
+[advanced index](../README.md).
+**Everything below the "Field lessons" header is boot-verified on maple
 (Oct 2026); treat the sections above it as the original checklist.**
 
 ## Field lessons (maple, verified on-device)
@@ -271,6 +273,57 @@ this doc is the KitKat delta. **Everything below the "Field lessons" header is b
   costs more than the sync readback it hides), so measure before assuming.
   And keep the readback OUT of the panel page itself (fb0 page races /
   vblank coupling — poplar tried it and reverted).
+- **Wifi needs its init services defined, not just its BoardConfig**
+  (maple TEST 36): KitKat wifi.c starts the supplicant with `ctl.start
+  wpa_supplicant`, which is a silent no-op when no such service exists —
+  and this tree defined none. The BoardConfig (`BOARD_WLAN_DEVICE :=
+  qcwcn`, NL80211, `lib_driver_cmd_qcwcn`) only keeps the supplicant
+  LINKABLE. Ship the hammerhead set (`wpa_supplicant`, `p2p_supplicant`,
+  `dhcpcd_wlan0/p2p`, `iprenew_*`, with the `-O.../sockets` ctrl dir and
+  `-I..._overlay.conf` files that must exist as early as the service
+  does) plus the dirs wifi.c never creates (`/data/misc/wifi/sockets`,
+  `/data/misc/dhcp`). `lib_driver_cmd_qcwcn` is a STATIC lib — its
+  absence from `/system/lib` is correct. Diagnose splits: driver loaded
+  (`/sys/module/wlan`, `/dev/wlan`) but no wlan0 and no
+  `/sys/class/ieee80211` phy = firmware/QMI handshake never ran (on
+  qca_cld3+icnss the WLFW side lives modem-side; a modem that never boots
+  may gate wifi too — verify before promising it).
+- **A silent sound card is a DT + daemon problem, not a HAL problem**
+  (maple TEST 36): `--- no soundcards ---` with zero tavil/tasha/wcd/slim
+  probe lines and empty `/sys/kernel/debug/asoc/*` means the machine
+  driver is deferring before it ever logs (the WSA/wcn-btfm waits are
+  `dev_dbg`, invisible without dynamic debug). Write the HAL anyway
+  (silent-safe while the card is absent so mediaserver stays up), but fix
+  the kernel side first, CHARQUIRKS order: strip the BT slimbus dai from
+  the sound node (`qcom,wcn-btfm` on msm8998 = pdx203's `qcom,wcn-bt =
+  <0>`; `scripts/patch-maple-dtb.py` does mdss + this together,
+  idempotent, byte-verified per DTB), set `service_locator.enable=0`
+  (with =1 the card waited ~5 min on pdr), put adsp firmware where
+  `firmware_class.path` points (a miss stalls ~60 s per file in ueventd's
+  user helper — that delay is the tell), and pin the dsp/slpi restart
+  levels to RELATED (SYSTEM panics the phone on any dsp crash). If the
+  card still doesn't probe, the WSA881x amps (`qcom,wsa-devs`) are the
+  next deferral suspect — check for any wsa/swr probe line before
+  stripping them (speakers need them).
+- **Read the running kernel, not the defconfig** (maple TEST 36):
+  `/proc/config.gz` is ground truth (`4.4.302-whatawurst+` has
+  `CONFIG_QCA_CLD_WLAN=y` built-in and the full tavil/WSA/QDSP6 set,
+  while the lineage-17.1 defconfig still says `=m`). Board comments
+  corrected from BCM43xx to WCN3990/cherokee the same way (BT tlv names
+  on the bluetooth partition agree).
+- **A new audio HAL must fill the whole ops table, not just open/write**
+  (maple TEST 36): mediaserver SIGSEGVs at `AudioFlinger.cpp:1349`
+  calling `dev->init_check` when a HAL leaves it NULL (tombstone:
+  `AudioPolicyCompatClient::loadHwModule` → libaudioflinger
+  `loadHwModule_l` → pc 0). Assign every pointer the framework can
+  reach — device close/init_check/volumes/mutes/mode/mic/params/
+  input_buffer_size/streams/dump, both stream commons
+  (rate/buffer/channels/format/standby/dump/params/effects), out
+  (latency/volume/write/render_position/write_timestamp) and in
+  (gain/read/frames_lost). Unused knobs return `-ENOSYS` or neutral
+  values (mirror `hardware/libhardware/modules/audio/audio_hw.c`, the
+  generic stub). Diagnose via `/data/tombstones` + `addr2line` against
+  `out/.../symbols/...` (cooper 32-vs-40-byte lesson, same tools).
 
 ## Container gotchas (verified)
 
@@ -298,7 +351,7 @@ this doc is the KitKat delta. **Everything below the "Field lessons" header is b
   JDK 6.)
 - **No ARM64 in KitKat.** `TARGET_ARCH := arm64` + `TARGET_2ND_ARCH` are a
   Lollipop-5.0 invention. MSM8998 bringup starts 32-bit (`armeabi-v7a`).
-  See `docs/devices/maple.md` blocker 1 — spike this before anything else.
+  See `docs/devices/maple/quirks.md` blocker 1 — spike this before anything else.
 - Host GCC: Trusty-era GCC 4.6/4.8 is the safe baseline (same lesson as
   Donut's GCC-16-vs-`apriori` failure, one generation newer).
 
@@ -336,7 +389,7 @@ this doc is the KitKat delta. **Everything below the "Field lessons" header is b
 ## Container gotchas (to fill in once built)
 
 - (Empty — log Trusty-apt/JDK6/debootstrap issues here as they are hit,
-  the way `docs/porting-notes.md` logs Hardy ones.)
+  the way `docs/advanced/porting-notes/donut.md` logs Hardy ones.)
 - **Measuring the panel pipeline on these ports (fb0 dumps, alpha, sleep)**
   (maple TEST 34/35, each trap cost real time): the fb is RGBA and it is
   normal for pixels to carry alpha 0 — an all-zero frame is *transparent
