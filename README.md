@@ -1,116 +1,129 @@
 # Retro Android Ports
 
-Running ancient Android releases on hardware that postdates them. The
-project ports AOSP from **Donut 1.6 through Nougat 7.1** to many different
-devices that never officially ran them — and distils every hard-won lesson
-into reusable playbooks so the next device is easier than the last.
+Running ancient Android on hardware that postdates it — with the goal of
+(a) porting **Donut 1.6** to more devices than the one it started on, and
+(b) distilling every hard-won lesson into a reusable playbook for bringing
+other ancient releases to newer devices.
 
-Verified so far:
+Verified so far: **Android 1.6 Donut (AOSP `android-1.6_r2`, DRD35)** builds
+in a period-correct Ubuntu 8.04 / JDK 5 chroot and **boots on the Samsung
+Galaxy Ace GT-S5830 (`cooper`, 2011, MSM7227)** — launcher, touchscreen
+(incl. capacitive keys), display at the stock 160 dpi, speaker audio,
+camera preview. Flashable CWM/TWRP zips are in
+[Releases](https://github.com/pukikiko/retro-android-ports/releases).
 
-- **Android 1.6 Donut** (AOSP `android-1.6_r2`, DRD35) on the **Samsung
-  Galaxy Ace GT-S5830** (`cooper`, 2011, MSM7227) — boots with touchscreen
-  (incl. capacitive keys), display at the stock 160 dpi, speaker audio.
-  Flashable CWM/TWRP zips are in [Releases](https://github.com/pukikiko/retro-android-ports/releases).
-- **Android 4.4.4 KitKat** (AOSP `android-4.4.4_r2`, KTU84Q) on the **Sony
-  Xperia XZ Premium** (`maple`, 2017, MSM8998) — boots to the launcher with
-  touch, USB adb, and hardware GL/GLES 3.2 on the Adreno 540 (via
-  [glrenderd](docs/advanced/software/glrenderd.md)).
+## Why Donut and not Cupcake?
 
-Cupcake 1.5 is out of scope: `platform/manifest` no longer carries a
-`cupcake`/`android-1.5` branch (`android-1.6_r1` is the oldest), so Donut
-is the oldest release that can still be synced. The full story — and why a
-2011 phone running Froyo/Gingerbread is a true retro target — is in the
-[Donut porting notes](docs/advanced/porting-notes/donut.md).
+Cupcake cannot be synced any more: `platform/manifest` on
+android.googlesource.com has no `cupcake` / `android-1.5` branch left (only
+`android-1.6_r1…` and later), so `repo init -b cupcake` is impossible.
+Donut is the oldest AOSP you can still check out. The S5830 (2011,
+Froyo/Gingerbread stock) postdates it by years; Donut's `armeabi`/`armv5te`
+runs on the ARMv6 MSM7227 and HVGA matches Donut-era devices, making this a
+true retro-port (candidate for more 2010–2012 hardware).
 
-## Supported devices
+## Ports
 
-| Device | Codename | Ports | Status |
+| Device | Codename | Release | Status |
 | --- | --- | --- | --- |
-| Samsung Galaxy Ace GT-S5830/L/T | `cooper` | Donut 1.6 (DRD35) | Boots on-device; launcher, touchscreen + capacitive keys, 160 dpi display, speaker audio. Cellular impossible (no Donut RIL for MSM7227); camera preview is test-pattern only. [Device page](docs/devices/cooper/README.md) |
-| Sony Xperia XZ Premium G8141/G8142 | `maple` | KitKat 4.4.4 (KTU84Q) | Boots to UI; touch, display, USB adb, hardware GL/GLES 3.2 (Adreno 540), brightness/sleep, emulated storage. WiFi/cellular/audio/camera/GPS still open. [Device page](docs/devices/maple/README.md) |
+| Samsung Galaxy Ace GT-S5830/L/T | `cooper` | Donut 1.6 (DRD35) | Boots on-device, daily-driving basics OK (see device doc) |
+| Sony Xperia XZ Premium G8141/G8142 | `maple` | KitKat 4.4.4 (KTU84Q) | Boots to UI: launcher, touch, display, USB adb (see device doc) |
+| Sony Xperia XZ1 G8341/G8342/G8343 (JP: SO-01K/SOV36) | `poplar` | KitKat 4.4.4 (KTU84Q) | Boots to UI: launcher + nav bar, touch, display, USB adb, HW GL via `glrenderd` (see device doc) |
 
-Each device has a main page (description, per-release status, links) and a
-**quirks** page (everything needed to port to that device — flash layout,
-verified fixes, open gaps): [cooper](docs/devices/cooper/quirks.md),
-[maple](docs/devices/maple/quirks.md).
-
-Release zips: [GitHub Releases](https://github.com/pukikiko/retro-android-ports/releases)
-(cooper assets are named `full_cooper-*`; maple images are built locally —
-see the [KitKat build guide](docs/advanced/build/kitkat.md)).
-
-## Advanced documentation
-
-The [advanced documentation index](docs/advanced/README.md) collects
-everything beyond the device pages:
-
-- **Porting notes per release** — [Donut 1.6](docs/advanced/porting-notes/donut.md),
-  [KitKat 4.4.4](docs/advanced/porting-notes/kitkat.md): toolchain, build-system
-  surprises, init/Edify/ABI differences and field lessons.
-- **Build guides per release** — [Donut for cooper](docs/advanced/build/donut.md),
-  [KitKat for maple](docs/advanced/build/kitkat.md), plus the
-  [build-server runbook](docs/advanced/build-server.md).
-- **Project software** — [vtouch](docs/advanced/software/vtouch.md)
-  (multi-touch → single-touch proxy for pre-multitouch Android),
-  [glrenderd](docs/advanced/software/glrenderd.md) (a newer GPU driver
-  under an old Android, in a chroot), [mkbootimg-cooper](docs/advanced/software/mkbootimg-cooper.md)
-  (pagesize-patched Donut mkbootimg).
+Device docs (hardware specifics, verified fixes, open gaps) live in
+[`docs/devices/`](docs/devices/): [cooper](docs/devices/cooper.md),
+[maple](docs/devices/maple.md), [poplar](docs/devices/poplar.md). `maple` and
+`poplar` are the same yoshino/MSM8998 platform — poplar is where the display and
+GPU work originated, so read the two together. KitKat playbook:
+[`docs/porting-notes-kitkat.md`](docs/porting-notes-kitkat.md); GPU fixes:
+[`docs/kitkat-gpu-fixes.md`](docs/kitkat-gpu-fixes.md).
 
 ## Repository layout
 
 ```
-devices/<codename>/<release>/      device tree, drop-in for the AOSP vendor/ path
-patches/<release>/                 diffs this port makes to pristine AOSP (+ files/ overlays)
-docs/advanced/README.md            advanced documentation index
-docs/advanced/porting-notes/       per-release playbooks (donut.md, kitkat.md)
-docs/advanced/build/               per-release build guides (donut.md, kitkat.md)
-docs/advanced/build-server.md      remote build-host runbook
-docs/advanced/software/            project-made software (vtouch, glrenderd, mkbootimg-cooper)
-docs/devices/<codename>/README.md  device main page: description, status, links
-docs/devices/<codename>/quirks.md  device quirks: everything needed to port to it
-scripts/                           build + packaging + device-tree sync (+ dump-maple-stock.sh, patch-maple-dtb.py)
-containers/<release>/              period build-container recipes (kitkat/)
-tools/                             project-made tools (mkbootimg-cooper, glrenderd sources)
-reference/                         third-party trees/images kept for board parameters
+devices/<codename>/<release>/   device tree, drop-in for aosp vendor/ path
+patches/<release>/              diffs this port makes to pristine AOSP
+  files/                        new-file overlays (e.g. vendor/googlelogin)
+docs/porting-notes.md           generic playbook: ancient Android on newer hardware (Donut era)
+docs/porting-notes-kitkat.md    KitKat-era playbook delta (4.4.4 on newer hardware)
+docs/devices/<codename>.md      per-device porting log
+scripts/                        build + packaging + device-tree sync (+ dump-maple-stock.sh)
+containers/kitkat/              KitKat build-container recipe (Trusty + JDK 6, untested)
+tools/                          mkbootimg-cooper (patched Donut mkbootimg)
+reference/                      third-party trees/images kept for board params
 ```
 
 Not in git (gitignored): `aosp-donut/`, `aosp-kitkat/` (re-syncable
-checkouts), `out/` (flashable zip outputs), `work/`, `dumps/` (packaging
-and device-dump scratch).
+checkouts), `out/` (flashable zip outputs), `work/` (packaging scratch).
 
-## Building
+## Building the cooper Donut port
 
-Each release has its own end-to-end guide; the README stays short:
+1. **AOSP tree**: `repo init -u https://android.googlesource.com/platform/manifest -b android-1.6_r2`
+   then `repo sync` (→ `aosp-donut/`, or point `AOSP_DIR` elsewhere).
+2. **Pristine → ported**: apply [`patches/donut/`](patches/donut/README.md)
+   and copy the `files/` overlay, then sync the device tree:
+   `scripts/sync-device-tree.sh cooper donut`.
+3. **Period chroot** (`/srv/donut-hardy`): Ubuntu 8.04 i386 + Sun JDK
+   1.5.0_15 + GCC 4.2.3 + Make 3.81 + Python 2.5; bind-mount the AOSP tree,
+   `lunch full_cooper-eng && make -j8`. All the gotchas (apt over modern
+   Apache, `secure_path` vs `bzip2`, zygote preload crash-loop, stale
+   `BoardConfig.mk` flags, …) are in
+   [`docs/porting-notes.md`](docs/porting-notes.md).
+4. **Package**: `scripts/build-cooper-donut-full.py` →
+   `out/full_cooper-1.6.DRD35-UNOFFICIAL-FULL-<date>.zip` (BML-aware CWM/
+   TWRP zip: cooper geometry boot.img, Donut updater with API-3 + raw-block
+   + `run_program` shims, 51 toolbox symlinks as real symlinks).
+   `scripts/build-cooper-donut-skeleton.py` builds the small preview zip.
 
-- [Building Donut 1.6 for cooper](docs/advanced/build/donut.md) — Hardy
-  i386 chroot + JDK 5 + GCC 4.2.3; packages
-  `out/full_cooper-1.6.DRD35-UNOFFICIAL-FULL-<date>.zip`.
-- [Building KitKat 4.4.4 for maple](docs/advanced/build/kitkat.md) —
-  Trusty + JDK 6 container, TWRP-dumped 4.4 kernel, glrenderd; flash via
-  TWRP `dd`.
-- Doing it on a remote host: [build server runbook](docs/advanced/build-server.md).
+## Building the maple KitKat port (boots to UI — see device doc)
+
+1. **AOSP tree**: `repo init -u https://android.googlesource.com/platform/manifest -b android-4.4.4_r2`
+   then `repo sync` (→ `aosp-kitkat/`, or point `AOSP_DIR` elsewhere;
+   use a shallow `repo sync -c --no-tags`, full history is 100+ GB).
+2. **Ported tree**: `scripts/sync-device-tree.sh maple kitkat`
+   (→ `$AOSP_DIR/vendor/sony/maple`), then apply `patches/kitkat/`
+   (see [`patches/kitkat/README.md`](patches/kitkat/README.md) — binder
+   64-bit UAPI, EGL/glrenderd, gralloc stride, wallpaper fallback, JDK 6).
+   The kernel (`vendor/sony/maple/kernel`) is a TWRP-dumped blob, kept
+   out of git.
+3. **Period container**: Ubuntu 14.04 + JDK 6 (`containers/kitkat/`),
+   `lunch full_maple-eng && make -j$(nproc)`. Flash `boot.img` +
+   raw-ext4 `system.img` (via `simg2img`) over TWRP `dd`, hashes
+   verified by readback. Current state (Oct 2026): launcher, touch,
+   display, USB adb working; WiFi/BT/RIL/camera/GPS still stub —
+   see [`docs/devices/maple.md`](docs/devices/maple.md).
+
+## Building the poplar KitKat port (boots to UI + HW GL — see device doc)
+
+Same container, AOSP tree and kernel handling as maple. Deltas: a 1080x1920
+command-mode panel (not 4K) and a different block map (`boot` `sda38`, `system`
+`sda65`, `userdata` `sda66`, `cache` `sda53`, `persist` `sda33`). `lunch
+full_poplar-eng`. poplar is where the `lights` HAL, the one-shot `displaytune.sh`
+sleep fix and the `glrenderd` GPU fixes
+([`docs/kitkat-gpu-fixes.md`](docs/kitkat-gpu-fixes.md)) were developed, then
+carried to maple. The device tree and GPU patches are not committed yet — see
+[`docs/devices/poplar.md`](docs/devices/poplar.md).
 
 ## Roadmap
 
-- [x] Donut 1.6 on `cooper`: boot to the home screen with touchscreen +
-      speaker audio (2026-10-12). Release zips shipped.
+- [x] Donut 1.6 boot on `cooper` with touchscreen + speaker audio
 - [ ] Finish cooper: USB adb shell, SD/vold, WiFi (ath6kl mid-bringup),
-      camera sensor feed (needs a kernel sensor driver, not a HAL change).
-- [x] KitKat 4.4.4 on `maple`: boots to the launcher with touch, display,
-      USB adb (Oct 2026); hardware GL/GLES on the Adreno 540; panel
-      presentation; XZ1/poplar reliability + GL perf sets (TESTs 30–35);
-      lights HAL; wifi feature/supplicant plumbing (TEST 36).
-- [ ] Finish maple: WiFi interface (WLFW/QMI handshake — likely
-      modem-gated), cellular, audio (playback stalls at PREPARED — ADSP
-      protection-domain work), camera, GPS, microSD; intermittent
-      pre-userspace boot hang documented.
-- [x] Generalize the layout/scripts for `devices/<codename>/<release>/`
-      (cooper/donut + maple/kitkat share one sync script).
-- [ ] Other releases on newer hardware — Eclair/Froyo next (Gingerbread
-      through Nougat planned; Cupcake is impossible, source gone).
-
-Device pages and their quirks logs carry the full detail and evidence:
-[cooper](docs/devices/cooper/README.md),
-[maple](docs/devices/maple/README.md).
+      camera sensor feed (needs kernel driver work)
+- [x] Generalize the device layout/scripts for `devices/<codename>/`
+      (`cooper/donut` + `maple/kitkat` skeletons share one sync script)
+- [x] KitKat 4.4.4 on `maple`: boots to launcher with touch, display,
+      USB adb (Oct 2026 — see `docs/devices/maple.md`)
+- [x] KitKat 4.4.4 on `poplar`: boots to launcher + nav bar with touch, display,
+      USB adb and Adreno 540 GL via `glrenderd` (Oct 2026 — see
+      `docs/devices/poplar.md`)
+- [ ] Finish poplar: commit `devices/poplar/kitkat/`, add `poplar` to
+      `scripts/sync-device-tree.sh`, and formalise the GPU fixes into
+      `patches/kitkat/`
+- [ ] Finish maple: WiFi/BT/RIL/camera/GPS HALs, glrenderd HW compositing,
+      microsd, audio
+- [ ] Other ancient releases on newer hardware — Eclair/Froyo next;
+      Cupcake is impossible (source gone), documented learning still
+      applies to custom 1.5 builds if a tree surfaces
 
 ## Licensing & credits
 
@@ -118,17 +131,10 @@ Device pages and their quirks logs carry the full detail and evidence:
   the same terms.
 - `reference/android_device_samsung_cooper` — LineageOS/CM
   (`gb-release-7.2`), Apache 2.0, kept for board parameters.
-- `reference/poplar-kitkat-gpu-fixes-2026-10-16.zip` — the complete KitKat
-  GPU/display fix bundle from a sibling XZ1 (`poplar`) port (full writeup,
-  patched sources, reference binaries), kept for maple's glrenderd work.
-- Vendor blobs (Samsung kernel/modules/firmware, Broadcom Atheros wifi
-  firmware; reference binaries inside the poplar bundle) are retained to
-  keep the ports buildable and remain under their vendors' original
-  licenses — they are **not** covered by the Apache 2.0 terms above.
-- `android_device_sony_maple` (sony-msm8998, `ten`) + `yoshino-common`
-  (`BoardConfigPlatform.mk`, msm8998) — reference only, Apache 2.0; board
-  params distilled into `devices/maple/kitkat/`, no blobs committed.
-- Device photos on the device pages come from Wikimedia Commons under
-  CC BY-SA (credit on each page).
-- `vtouch` is ported from MLXProjects' Froyo `vtouch` 1.2.0; `glrenderd`
-  is ported from [chardidathing/pdx203-jellybean](https://github.com/chardidathing/pdx203-jellybean).
+- Vendor blobs (Samsung kernel/modules/firmware, Broadcom Atheros firmware)
+  are retained for personal device servicing only; keep this repo private
+  and do not redistribute.
+- `android_device_sony_maple` + `android_device_sony_poplar` (sony-msm8998,
+  `ten`) + `yoshino-common` (`BoardConfigPlatform.mk`, msm8998) — reference only,
+  Apache 2.0; board params distilled into `devices/maple/kitkat/` (and poplar's
+  tree once committed), no blobs committed.

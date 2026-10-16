@@ -1,0 +1,13 @@
+# ueventd.poplar.rc — KitKat skeleton for Sony poplar
+# SKELETON: node ownership for first bringup. Derive the full list from
+# stock ueventd output + yoshino-common once the 4.4 kernel is probed.
+# (cooper precedent: ueventd.gt-s5830.rc gained msm_snd/pcm + video0 nodes
+# only after live measurement — same discipline here.)
+
+/dev/msm_snd              0660   system     audio
+/dev/msm_pcm_out          0660   system     audio
+/dev/msm_pcm_in           0660   system     audio
+/dev/msm_pcm_ctl          0660   system     audio
+/dev/uinput               0660   system     bluetooth
+/dev/video0               0660   system     camera
+/dev/graphics/fb0         0660   system     graphics

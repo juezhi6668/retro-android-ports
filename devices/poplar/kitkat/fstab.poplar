@@ -1,0 +1,13 @@
+# fstab.poplar — KitKat skeleton (GPT/ext4)
+# Block paths: ueventd on the 4.4 kernel creates them under
+# /dev/block/platform/soc/by-name/* — /dev/block/bootdevice/ does NOT
+# exist on KitKat (seen 2026-10-14: no such directory; platform/soc/
+# by-name has system->sda65, userdata->sda66, cache->sda53, persist->sda33).
+# TODO: dsp/bt_firmware/modem rows are reference-only until the
+# corresponding KitKat services exist.
+/dev/block/sda65   /system  ext4  ro                                                              wait
+/dev/block/sda66 /data    ext4  nosuid,nodev,noatime,nodiratime,nobarrier,noauto_da_alloc        wait,check,encryptable=footer
+/dev/block/sda53    /cache   ext4  nosuid,nodev,noatime,nodiratime,nobarrier                        wait,check
+/dev/block/sda33  /persist ext4  nosuid,nodev,barrier=1                                          wait,notrim
+# no trailing wildcard, kitkat vold prefix matches the devpath
+/devices/soc/c0a4900.sdhci/mmc_host     auto     auto  nosuid,nodev                                                    voldmanaged=sdcard1:auto

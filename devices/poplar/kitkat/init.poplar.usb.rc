@@ -1,0 +1,67 @@
+# KitKat poplar USB gadget: configfs + FunctionFS for adbd.
+# Ported from pdx203-jellybean (chardidathing) via retro-android-ports (maple), poplar-adapted.
+#
+# IMPORTANT: in KitKat init, a command that FAILS aborts its ENTIRE action
+# silently (no error). The gadget bring-up is therefore split so that each step
+# is its own `on fs` stanza -- one bad path (e.g. a device-specific sysfs node)
+# cannot kill the configfs/ffs setup that adb depends on.
+
+on fs
+    mkdir /config 0770 shell shell
+
+on fs
+    mount configfs none /config
+
+on fs
+    mkdir /config/usb_gadget/g1 0770 shell shell
+
+on fs
+    write /config/usb_gadget/g1/idVendor 0x18d1
+    write /config/usb_gadget/g1/idProduct 0x4ee7
+    write /config/usb_gadget/g1/bcdUSB 0x0200
+
+on fs
+    mkdir /config/usb_gadget/g1/strings/0x409 0770 shell shell
+
+on fs
+    write /config/usb_gadget/g1/strings/0x409/serialnumber poplarkk
+    write /config/usb_gadget/g1/strings/0x409/manufacturer Sony
+    write /config/usb_gadget/g1/strings/0x409/product poplar-kitkat
+
+on fs
+    mkdir /config/usb_gadget/g1/configs/b.1 0770 shell shell
+
+on fs
+    mkdir /config/usb_gadget/g1/configs/b.1/strings/0x409 0770 shell shell
+
+on fs
+    write /config/usb_gadget/g1/configs/b.1/strings/0x409/configuration adb
+
+on fs
+    mkdir /config/usb_gadget/g1/functions/ffs.adb
+
+on fs
+    symlink /config/usb_gadget/g1/functions/ffs.adb /config/usb_gadget/g1/configs/b.1/f1
+
+on fs
+    mkdir /dev/usb-ffs 0770 shell shell
+
+on fs
+    mkdir /dev/usb-ffs/adb 0770 shell shell
+
+on fs
+    mount functionfs adb /dev/usb-ffs/adb uid=2000,gid=2000
+
+# device-specific superspeed hint, isolated: if this sysfs path differs on
+# poplar the write fails here WITHOUT aborting any of the gadget setup above.
+on fs
+    write /sys/devices/soc/a800000.ssusb/speed high
+
+on property:sys.usb.config=adb
+    start adbd
+    start usbudc
+
+# binds the gadget once adbd has written its descriptors, and re-binds whenever
+# adbd drops it (KitKat adbd closes ep0 on every disconnect, unbinding the udc)
+service usbudc /system/bin/sh /sbin/usbudc.sh
+    disabled

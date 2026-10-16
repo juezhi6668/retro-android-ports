@@ -1,0 +1,174 @@
+# init.poplar.rc — KitKat skeleton for Sony poplar (MSM8998, GPT/ext4)
+# SKELETON: mounts + early USB only. Imported from init.rc via
+# `import /init.${ro.hardware}.rc` (ro.hardware=poplar), exactly once —
+# do NOT add a second explicit import (it used to double-parse this file
+# and spam ignored-duplicate errors for every service below).
+# the KitKat init.rc itself is still TODO — start from aosp-kitkat
+# system/core/rootdir/init.rc once synced, the way cooper's init.rc was
+# derived from Donut's).
+# Block paths: /dev/block/bootdevice/by-name/* (from TWRP
+# fstab_poplar.recovery). VERIFY on stock before first boot.
+
+# Configfs USB gadget (adbd + usbudc services, sys.usb.config trigger).
+# WITHOUT this import the usbudc service is unknown to init and there is
+# no USB at all (regression seen 2026-10-15: this import lived only on
+# the build server and a repo→server sync dropped it).
+import /init.poplar.usb.rc
+
+on early-init
+    # MSM8998 USB gadget (DWC3, a800000.dwc3) — KitKat-era functionfs/adb
+    # path TBD against the 4.4 kernel; android_usb fallback kept so adb has
+    # a chance on first bringup. Nonexistent-path writes fail silently.
+    write /sys/class/android_usb/android0/enable 0
+    write /sys/class/android_usb/android0/idVendor 0FCE
+    write /sys/class/android_usb/android0/idProduct 41DB
+    write /sys/class/android_usb/android0/functions adb
+    write /sys/class/android_usb/android0/iManufacturer Sony
+    write /sys/class/android_usb/android0/iProduct G8341
+    write /sys/class/android_usb/android0/enable 1
+
+on init
+    # PERMISSIVE SELinux for bringup: KitKat's policy mismatches the 4.4
+    # kernel everywhere; enforcing mode buries the boot in denials (and a
+    # suspect audit-backlog D-state storm pinned load at 6+ with zero CPU
+    # for 11+ min). Policy audit is a later project; cooper precedent says
+    # get the boot green first. TODO: re-enable + audit.
+    setenforce 0
+    # NOTE: no coldboot wait here: KitKat init has no
+    # `wait_for_coldboot_done` (invalid command, aborts the action) and the
+    # mounts below use RAW sda/sde nodes (stable GPT numbers, present
+    # without ueventd symlinks), so no wait is needed.
+
+# NOTE: each mount is its OWN `on init` action. A failing init command
+# aborts its action SILENTLY — one bad mount used to kill persist + all
+# mkdirs below it. Independent stanzas isolate failures (proven: cache
+# mount failure hid everything after it in TEST 6).
+# GPT/ext4 mounts by RAW node (sde/sda numbers from TWRP by-name dump
+# 2026-10-13: stable GPT partition numbers, no symlink timing involved):
+# system->sda65, cache->sda53, userdata->sda66, persist->sda33.
+# KitKat mount syntax: space-separated FLAGS, ONE trailing options arg.
+# /cache + /persist have NO ramdisk dirs from stock init.rc — create them
+# HERE, before the mounts: mount onto a missing dir fails ENOENT SILENTLY
+# (seen 2026-10-14: only /system + /data mounted, no /cache or /persist).
+on init
+    mkdir /cache 0770 system cache
+    mkdir /persist 0771 system system
+
+on init
+    mount ext4 /dev/block/sda65 /system ro wait
+
+on init
+    mount ext4 /dev/block/sda66 /data nosuid nodev noatime nodiratime wait noauto_da_alloc,barrier=0
+
+on init
+    mount ext4 /dev/block/sda53 /cache nosuid nodev noatime nodiratime wait noauto_da_alloc,barrier=0
+
+on init
+    mount ext4 /dev/block/sda33 /persist nosuid nodev wait barrier=1
+
+on init
+
+    mkdir /data/misc 01771 system misc
+    mkdir /data/misc/wifi 0770 wifi wifi
+    mkdir /data/misc/log 0775 system log
+    mkdir /data/local/tmp 0771 shell shell
+    mkdir /data/dalvik-cache 0771 system system
+    # PRODUCT_COPY_FILES lands 644; the diag scripts must exec.
+    chmod 0755 /system/bin/dump-boot-log.sh
+    chmod 0755 /sbin/autowinch.sh
+
+    # TODO: modem/firmware mounts (vfat /firmware, /bt_firmware) once the
+    # corresponding daemons exist. NOT mounted until needed — see
+    # fstab.poplar + docs/devices/poplar.md blocker 5.
+    # TODO: 32-bit-userspace cgroup/lowmemorykiller tuning for 4 GB RAM
+    # (cooper's 6-slot adj/minfree values do NOT carry over; re-derive from
+    # KitKat ActivityManager defaults + measured pressure).
+
+on init
+    mkdir /mnt/shell/emulated 0700 shell shell
+    mkdir /storage/emulated 0555 root root
+    mkdir /mnt/media_rw/sdcard1 0700 media_rw media_rw
+    mkdir /storage/sdcard1 0700 root root
+    export EXTERNAL_STORAGE /storage/emulated/legacy
+    export EMULATED_STORAGE_SOURCE /mnt/shell/emulated
+    export EMULATED_STORAGE_TARGET /storage/emulated
+    export SECONDARY_STORAGE /storage/sdcard1
+    symlink /storage/emulated/legacy /sdcard
+    symlink /storage/emulated/legacy /mnt/sdcard
+    symlink /storage/emulated/legacy /storage/sdcard0
+    symlink /mnt/shell/emulated/0 /storage/emulated/legacy
+
+on post-fs-data
+    mkdir /data/media 0770 media_rw media_rw
+
+    # the kernel resolves this from the requester's root, glrenderd's chroot has the a540 firmware there
+    write /sys/module/firmware_class/parameters/path /vendor/firmware
+    # glrenderd NOT started by default: its uncoordinated FBIOPAN flips
+    # race SurfaceFlinger's and wedge the mdss overlay start (EBUSY ->
+    # panel frozen on the xboot splash; seen 2026-10-15). Pure SF+libagl
+    # is proven on the panel (correct UI twice). Start it live only for
+    # experiments (`adb shell start glrenderd`); re-architect the split
+    # (single flipper) before returning it to boot.
+    #start glrenderd
+
+    # the clearpad driver doesn't finish probing (no touch events) until this, lineage does the same
+    write /sys/devices/virtual/input/clearpad/post_probe_start 1
+
+on boot
+    # Safety net: (re)start adbd now that init is up. No-op if running.
+    start adbd
+    # Bind the configfs USB gadget unconditionally: the
+    # `on property:sys.usb.config=adb` trigger proved unreliable (it never
+    # fired on the first full-boot 2026-10-15 — UsbDeviceManager owns that
+    # property once system_server runs — so usbudc never started and there
+    # was no USB at all). usbudc.sh re-binds whenever unbound; harmless if
+    # the trigger already started it (second start is a no-op).
+    start usbudc
+    start bootlog
+
+# NOTE: autowinch (auto-return to TWRP after 15 min) was removed
+# 2026-10-15 once USB adb worked — it kept killing every good boot.
+# If a future boot wedges with no adb, re-add:
+#   on boot: start autowinch
+#   service autowinch /sbin/autowinch.sh (user root, disabled, oneshot)
+
+# DIAG (test 7): no USB/adb yet (DWC3 needs functionfs bringup — later),
+# so capture logs to files for TWRP-side pull. Remove once adb works.
+# NOT oneshot: the script loops forever snapshotting ps/loadavg/dalvik.
+service bootlog /system/bin/dump-boot-log.sh
+    user root
+    disabled
+
+# class main not late_start, late_start only fires from mount_all and the mounts here are by hand
+service sdcard /system/bin/sdcard -u 1023 -g 1023 -l /data/media /mnt/shell/emulated
+    class main
+
+# vold starts this by name (fuse_<label>) once it has mounted the card on /mnt/media_rw/sdcard1
+service fuse_sdcard1 /system/bin/sdcard -u 1023 -g 1023 -w 1023 -d /mnt/media_rw/sdcard1 /storage/sdcard1
+    class main
+    disabled
+
+# adreno renderer for the whole ui, surfaceflinger and apps talk to it over the glrenderd socket.
+# stats and crashes land in dmesg
+service glrenderd /system/bin/sh /sbin/glrenderd.sh
+    class core
+    disabled
+
+# --- GPU (glrenderd) bring-up ------------------------------------------------
+# start the renderer before the framework so surfaceflinger's egl loader picks
+# the emulation path (the patched loader waits up to 5s for the socket)
+on post-fs-data
+    start glrenderd
+
+# Was "keepawake": a workaround that pinned the panel on because the framework's
+# unblank path did not restore it after a screen timeout. That no longer holds, and
+# the workaround re-lit the backlight seconds after the screen was switched off.
+# It is now a one-shot that just undoes the settings it left behind, so the screen
+# blanks on timeout and wakes on the power key like normal.
+on boot
+    start displaytune
+
+service displaytune /system/bin/sh /sbin/displaytune.sh
+    class core
+    disabled
+    oneshot

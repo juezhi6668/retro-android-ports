@@ -1,0 +1,7 @@
+# ported from pdx203-jellybean by @chardidathing, https://github.com/chardidathing/pdx203-jellybean
+# scancodes from lineage's yoshino gpio-keys.kl. power comes from qpnp_pon, Generic.kl has it
+key 115   VOLUME_UP
+key 114   VOLUME_DOWN
+# the camera key's half press
+key 528   FOCUS
+key 766   CAMERA

@@ -1,0 +1,24 @@
+#
+# system.prop for poplar (KitKat skeleton — TODO verify each entry live)
+#
+# Display density: 430, measured live on the running KitKat port
+# (`ro.sf.lcd_density=430`, fb0 1080x1920). Carried over from yoshino-common
+# and verified on-device (cf. cooper's 120-vs-160 lesson: measure, don't guess).
+ro.sf.lcd_density=430
+qemu.sf.lcd_density=430
+
+# Wifi interface (yoshino BCM43xx; confirm on stock: wlan0)
+wifi.interface=wlan0
+
+# Model/brand (must match full_poplar.mk + OTA asserts)
+ro.product.model=G8341
+ro.product.brand=sony
+ro.product.manufacturer=Sony
+ro.product.device=poplar
+
+# TODO: ril_class / mobiledata.interfaces once the MSM8998 RIL path is
+# evaluated (no cellular on first bringup — cf. cooper rild-removed).
+# TODO: camera media profiles once the HAL lands.
+
+# gles 2.0 through glrenderd, apps that check this refuse to run below it
+ro.opengles.version=131072
