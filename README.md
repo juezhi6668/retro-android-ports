@@ -27,7 +27,7 @@ true retro-port (candidate for more 2010–2012 hardware).
 | Device | Codename | Release | Status |
 | --- | --- | --- | --- |
 | Samsung Galaxy Ace GT-S5830/L/T | `cooper` | Donut 1.6 (DRD35) | Boots on-device, daily-driving basics OK (see device doc) |
-| Sony Xperia XZ Premium G8141/G8142 | `maple` | KitKat 4.4.4 (KTU84Q) | Boots to UI: launcher, touch, display, USB adb (see device doc) |
+| Sony Xperia XZ Premium G8141/G8142 | `maple` | KitKat 4.4.4 (KTU84Q) | Boots to UI + HW GL/GLES on Adreno 540 (see device doc) |
 
 Device docs (hardware specifics, verified fixes, open gaps) live in
 [`docs/devices/`](docs/devices/): [cooper](docs/devices/cooper.md),
@@ -43,7 +43,7 @@ patches/<release>/              diffs this port makes to pristine AOSP
 docs/porting-notes.md           generic playbook: ancient Android on newer hardware (Donut era)
 docs/porting-notes-kitkat.md    KitKat-era playbook delta (4.4.4 on newer hardware)
 docs/devices/<codename>.md      per-device porting log
-scripts/                        build + packaging + device-tree sync (+ dump-maple-stock.sh)
+scripts/                        build + packaging + device-tree sync (+ dump-maple-stock.sh, patch-maple-dtb.py)
 containers/kitkat/              KitKat build-container recipe (Trusty + JDK 6, untested)
 tools/                          mkbootimg-cooper (patched Donut mkbootimg)
 reference/                      third-party trees/images kept for board params
@@ -98,8 +98,18 @@ checkouts), `out/` (flashable zip outputs), `work/` (packaging scratch).
       (`cooper/donut` + `maple/kitkat` skeletons share one sync script)
 - [x] KitKat 4.4.4 on `maple`: boots to launcher with touch, display,
       USB adb (Oct 2026 — see `docs/devices/maple.md`)
-- [ ] Finish maple: WiFi/BT/RIL/camera/GPS HALs, glrenderd HW compositing,
-      microsd, audio
+- [x] Hardware GL/GLES on `maple`: glrenderd single-flipper renderer over
+      the Adreno 540, GLES 3.2 verified on cold boot (Oct 2026)
+- [x] `maple` panel presentation: fb0 content reaches the physical panel
+      (FBIOPUT flip + mdss idle-collapse disabled in the DTB — Oct 2026)
+- [x] `maple`: XZ1/poplar fix bundle **fully ported** — reliability set
+      (fork safety, bounded reply + in-place reconnect, ReadBuffer caps,
+      input freeze thaw, lights HAL, keyguard scrim) **and the GL perf set**
+      (A6 slot readback, 8 MiB socket buffers, desync-proof renderer,
+      frame/swap diagnostics). Verified on device: systemui survives navbar
+      stress, GL stays on Adreno 540, sustained UI 26–35 fps. See TEST 33–35
+      in [`docs/devices/maple.md`](docs/devices/maple.md)
+- [ ] Finish maple: WiFi/BT/RIL/camera/GPS HALs, microsd, audio
 - [ ] Other ancient releases on newer hardware — Eclair/Froyo next;
       Cupcake is impossible (source gone), documented learning still
       applies to custom 1.5 builds if a tree surfaces

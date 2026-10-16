@@ -53,7 +53,8 @@ PRODUCT_PACKAGES += \
     libGLESv1_CM_emulation \
     libGLESv2_emulation \
     gralloc.maple \
-    gralloc.default
+    gralloc.default \
+    lights.maple
 
 # glrenderd's chroot from tools/glrenderd/stage.py. it lives outside vendor/sony/maple so
 # sync-device-tree.sh's rsync --delete leaves it alone. the a540 firmware also goes where

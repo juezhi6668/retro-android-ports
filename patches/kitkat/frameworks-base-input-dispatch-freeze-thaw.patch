@@ -1,0 +1,94 @@
+diff --git a/services/input/InputDispatcher.cpp b/services/input/InputDispatcher.cpp
+index 10a639e7..6aa0a49b 100644
+--- a/services/input/InputDispatcher.cpp
++++ b/services/input/InputDispatcher.cpp
+@@ -197,7 +197,8 @@ InputDispatcher::InputDispatcher(const sp<InputDispatcherPolicyInterface>& polic
+     mPolicy(policy),
+     mPendingEvent(NULL), mAppSwitchSawKeyDown(false), mAppSwitchDueTime(LONG_LONG_MAX),
+     mNextUnblockedEvent(NULL),
+-    mDispatchEnabled(false), mDispatchFrozen(false), mInputFilterEnabled(false),
++    mDispatchEnabled(false), mDispatchFrozen(false), mDispatchFrozenTime(0),
++    mInputFilterEnabled(false),
+     mInputTargetWaitCause(INPUT_TARGET_WAIT_CAUSE_NONE) {
+     mLooper = new Looper(false);
+ 
+@@ -245,6 +246,14 @@ void InputDispatcher::dispatchOnce() {
+     mLooper->pollOnce(timeoutMillis);
+ }
+ 
++// POPLAR: how long a frozen dispatch may last before we lift it ourselves.
++// WindowManagerService freezes dispatch around window transitions; a real
++// transition is a few hundred milliseconds. If the transition never completes
++// (e.g. the app that was transitioning died), the frozen branch below returns
++// without setting nextWakeupTime, so the dispatcher sleeps forever and the
++// device keeps drawing a UI that accepts no touch at all.
++#define kMaxDispatchFreezeNanos (10 * 1000000000LL)
++
+ void InputDispatcher::dispatchOnceInnerLocked(nsecs_t* nextWakeupTime) {
+     nsecs_t currentTime = now();
+ 
+@@ -257,10 +266,40 @@ void InputDispatcher::dispatchOnceInnerLocked(nsecs_t* nextWakeupTime) {
+ 
+     // If dispatching is frozen, do not process timeouts or try to deliver any new events.
+     if (mDispatchFrozen) {
++        if (mDispatchFrozenTime
++                && currentTime - mDispatchFrozenTime > kMaxDispatchFreezeNanos) {
++            // POPLAR: whoever froze us is not coming back. Lift it, or input stays
++            // dead for the rest of the boot (the UI keeps animating, touches queue
++            // up in mInboundQueue and go nowhere).
++            nsecs_t frozenForMs = (currentTime - mDispatchFrozenTime) / 1000000;
++            ALOGE("Dispatch has been frozen for %lld ms - forcing it back on, "
++                  "input would otherwise be dead for good",
++                  (long long)frozenForMs);
++            FILE* fp = fopen("/data/system/dispatch-thaw.log", "a");
++            if (fp) {
++                fprintf(fp, "frozen for %lld ms at uptime-ish %lld ms, forcing thaw\n",
++                        (long long)frozenForMs, (long long)(systemTime(SYSTEM_TIME_BOOTTIME) / 1000000));
++                fclose(fp);
++            }
++            mDispatchFrozen = false;
++            mDispatchFrozenTime = 0;
++            resetANRTimeoutsLocked();
++            mLooper->wake();
++            // fall through and dispatch normally
++        } else {
+ #if DEBUG_FOCUS
+-        ALOGD("Dispatch frozen.  Waiting some more.");
++            ALOGD("Dispatch frozen.  Waiting some more.");
+ #endif
+-        return;
++            // Wake up when the deadline passes, otherwise this branch parks the
++            // dispatcher on an infinite poll timeout and it is never re-checked.
++            if (mDispatchFrozenTime) {
++                nsecs_t deadline = mDispatchFrozenTime + kMaxDispatchFreezeNanos;
++                if (deadline < *nextWakeupTime) {
++                    *nextWakeupTime = deadline;
++                }
++            }
++            return;
++        }
+     }
+ 
+     // Optimize latency of app switches.
+@@ -2936,6 +2975,7 @@ void InputDispatcher::setInputDispatchMode(bool enabled, bool frozen) {
+ 
+             mDispatchEnabled = enabled;
+             mDispatchFrozen = frozen;
++            mDispatchFrozenTime = frozen ? now() : 0;
+             changed = true;
+         } else {
+             changed = false;
+diff --git a/services/input/InputDispatcher.h b/services/input/InputDispatcher.h
+index 190e7b22..50b6280a 100644
+--- a/services/input/InputDispatcher.h
++++ b/services/input/InputDispatcher.h
+@@ -923,6 +923,9 @@ private:
+     // Dispatch state.
+     bool mDispatchEnabled;
+     bool mDispatchFrozen;
++    // POPLAR: monotonic time the current freeze started, 0 when not frozen. Used to
++    // lift a freeze that is never lifted by the caller (see dispatchOnceInnerLocked).
++    nsecs_t mDispatchFrozenTime;
+     bool mInputFilterEnabled;
+ 
+     Vector<sp<InputWindowHandle> > mWindowHandles;

@@ -1,5 +1,219 @@
 ported from pdx203-jellybean by @chardidathing, https://github.com/chardidathing/pdx203-jellybean
 
+diff --git a/opengl/shared/OpenglCodecCommon/SocketStream.cpp b/opengl/shared/OpenglCodecCommon/SocketStream.cpp
+index f7a2314..a7af41e 100644
+--- a/opengl/shared/OpenglCodecCommon/SocketStream.cpp
++++ b/opengl/shared/OpenglCodecCommon/SocketStream.cpp
+@@ -25,10 +25,86 @@
+ #include <netinet/in.h>
+ #include <netinet/tcp.h>
+ #include <sys/un.h>
++#include <sys/socket.h>
++#include <sys/time.h>
++#include <sys/system_properties.h>
+ #else
+ #include <ws2tcpip.h>
+ #endif
+ 
++
++/*
++ * POPLAR: "the renderer stopped answering" is a per-thread fact, matching the
++ * per-thread HostConnection and its TLS slot. It is deliberately not a member of
++ * SocketStream and not a new virtual: alloc()/flush() are inline, so the
++ * prebuilt encoder libraries have them inlined with hard-coded member offsets
++ * and vtable slots. Adding either shifts them and breaks those libraries.
++ */
++
++// How long to wait for a reply. A legitimate reply is one renderer round-trip:
++// milliseconds, or a full-frame readback (~8 MB) at worst. Anything past this is
++// a wedged renderer, not a slow one. Overridable for experiments without a
++// rebuild:  setprop persist.glr.replytimeout <seconds>
++#define GLR_REPLY_TIMEOUT_DEFAULT 20
++
++static __thread bool t_streamDead = false;
++
++bool glrGuestStreamDead() { return t_streamDead; }
++
++void glrGuestStreamRevive()
++{
++    if (t_streamDead) {
++        t_streamDead = false;
++        // only on the transition: HostConnection::get() calls this on every GL call
++        ERR("glr-guest: reconnecting to the renderer\n");
++    }
++}
++
++static void glrMarkDead(const char *why)
++{
++    if (!t_streamDead) {
++        t_streamDead = true;
++        ERR("glr-guest: giving up on the renderer (%s)\n", why);
++    }
++}
++
++void glrGuestSetReplyTimeout(int sock)
++{
++    if (sock < 0) return;
++
++    int secs = GLR_REPLY_TIMEOUT_DEFAULT;
++    char v[PROP_VALUE_MAX];
++    if (__system_property_get("persist.glr.replytimeout", v) > 0) {
++        int n = atoi(v);
++        if (n > 0 && n < 3600) secs = n;
++    }
++
++    struct timeval tv;
++    tv.tv_sec = secs;
++    tv.tv_usec = 0;
++    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
++    // MAPLE: bound the write side too. If the renderer stops draining its
++    // socket, send() would otherwise park the caller forever.
++    setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
++}
++
++// MAPLE: the kernel default socket buffer is 208 KB (net.core.{r,w}mem_default)
++// while one UI frame's GL command stream is easily several hundred KB. With a
++// socket that small the guest blocks in send() in the middle of a frame until
++// the renderer consumed it, serializing guest work with host work (measured:
++// ~30 fps cap, every frame submitted on the heels of the previous readback).
++// Let a frame or two be in flight: raise both directions. The system caps are
++// raised to 16 MiB by glrenderd before it listens.
++#define GLR_SOCK_BUF (8u << 20)
++
++void glrSetSocketBuffers(int sock)
++{
++    if (sock < 0) return;
++    int sz = GLR_SOCK_BUF;
++    setsockopt(sock, SOL_SOCKET, SO_SNDBUF, &sz, sizeof(sz));
++    setsockopt(sock, SOL_SOCKET, SO_RCVBUF, &sz, sizeof(sz));
++}
++
+ SocketStream::SocketStream(size_t bufSize) :
+     IOStream(bufSize),
+     m_sock(-1),
+@@ -90,29 +166,39 @@ int SocketStream::commitBuffer(size_t size)
+ 
+ int SocketStream::writeFully(const void* buffer, size_t size)
+ {
+-    if (!valid()) return -1;
++    if (!valid()) {
++        // A dead stream must not report failure: IOStream::alloc() would then
++        // return NULL and the (prebuilt) encoder libraries memcpy into it.
++        // Dropping the command leaves GL degraded but the process alive.
++        return 0;
++    }
+ 
+     size_t res = size;
+-    int retval = 0;
+ 
+     while (res > 0) {
+-        ssize_t stat = ::send(m_sock, (const char *)buffer + (size - res), res, 0);
++        // MSG_NOSIGNAL so a closed glrenderd socket returns EPIPE instead of
++        // raising SIGPIPE (which was crashing surfaceflinger).
++        ssize_t stat = ::send(m_sock, (const char *)buffer + (size - res), res, MSG_NOSIGNAL);
+         if (stat < 0) {
+-            if (errno != EINTR) {
+-                retval =  stat;
+-                ERR("%s: failed: %s\n", __FUNCTION__, strerror(errno));
+-                break;
++            if (errno == EINTR) {
++                continue;
+             }
+-        } else {
+-            res -= stat;
++            ERR("%s: failed: %s\n", __FUNCTION__, strerror(errno));
++            glrMarkDead("send failed");
++            // MAPLE: close the socket so the next call reconnects instead of
++            // writing to a dead fd. The command is dropped on purpose:
++            // reporting failure here would NULL IOStream::alloc() and the
++            // caller would memcpy into it.
++            closeDead();
++            return 0;
+         }
++        res -= stat;
+     }
+-    return retval;
++    return 0;
+ }
+ 
+ const unsigned char *SocketStream::readFully(void *buf, size_t len)
+ {
+-    const unsigned char* ret = NULL;
+     if (!valid()) return NULL;
+     if (!buf) {
+       return NULL;  // do not allow NULL buf in that implementation
+@@ -124,7 +210,20 @@ const unsigned char *SocketStream::readFully(void *buf, size_t len)
+             res -= stat;
+             continue;
+         }
++        if (stat < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
++            // The renderer is not answering. Do NOT keep waiting: for
++            // surfaceflinger this runs on the compositor thread, and blocking
++            // here freezes the display for good.
++            glrMarkDead("reply timeout");
++            closeDead();
++            return NULL;
++        }
+         if (stat == 0 || errno != EINTR) { // client shutdown or error
++            // Includes EOF: the renderer died or init restarted it. Mark it
++            // dead AND close the fd so the next GL call reconnects
++            // (RenderdStream::reconnectIfDead) instead of reading a dead socket.
++            glrMarkDead(stat == 0 ? "renderer closed the socket" : "socket error");
++            closeDead();
+             return NULL;
+         }
+     }
+@@ -166,3 +265,15 @@ int SocketStream::recv(void *buf, size_t len)
+     }
+     return res;
+ }
++
++void SocketStream::closeDead()
++{
++    if (m_sock >= 0) {
++#ifdef _WIN32
++        closesocket(m_sock);
++#else
++        ::close(m_sock);
++#endif
++        m_sock = -1;
++    }
++}
+diff --git a/opengl/shared/OpenglCodecCommon/SocketStream.h b/opengl/shared/OpenglCodecCommon/SocketStream.h
+index 3a501b4..68399af 100644
+--- a/opengl/shared/OpenglCodecCommon/SocketStream.h
++++ b/opengl/shared/OpenglCodecCommon/SocketStream.h
+@@ -19,6 +19,17 @@
+ #include <stdlib.h>
+ #include "IOStream.h"
+ 
++// POPLAR: a synchronous GL call (glGetError, glCreateProgram, a readback, ...)
++// waits for the renderer's reply. If glrenderd wedges, or dies without closing
++// the socket cleanly, that wait has to end: for surfaceflinger the waiter is the
++// compositor's main thread, and blocking it freezes the display permanently.
++// These let the stream give up, and let HostConnection::get() drop the dead
++// connection so the next call reconnects.
++void glrGuestSetReplyTimeout(int sock);
++bool glrGuestStreamDead();
++void glrGuestStreamRevive();
++void glrSetSocketBuffers(int sock);
++
+ class SocketStream : public IOStream {
+ public:
+     typedef enum { ERR_INVALID_SOCKET = -1000 } SocketStreamError;
+@@ -45,6 +56,12 @@ protected:
+     unsigned char *m_buf;
+ 
+     SocketStream(int sock, size_t bufSize);
++
++    // MAPLE: close and invalidate the socket when it is declared dead, so a
++    // later call reconnects instead of reusing a dead fd
++    // (see RenderdStream::reconnectIfDead). Not virtual on purpose: the
++    // encoder libraries have hard-coded vtable slots.
++    void closeDead();
+ };
+ 
+ #endif /* __SOCKET_STREAM_H */
 diff --git a/opengl/system/GLESv1_enc/GLEncoder.cpp b/opengl/system/GLESv1_enc/GLEncoder.cpp
 index 4414f24..a3f19f9 100644
 --- a/opengl/system/GLESv1_enc/GLEncoder.cpp
@@ -167,18 +381,53 @@ index 6198748..914fb5e 100644
  
  $(call emugl-export,C_INCLUDES,$(LOCAL_PATH) bionic/libc/private)
 diff --git a/opengl/system/OpenglSystemCommon/HostConnection.cpp b/opengl/system/OpenglSystemCommon/HostConnection.cpp
-index 940f5ae..a225954 100644
+index 940f5ae..15b8db3 100644
 --- a/opengl/system/OpenglSystemCommon/HostConnection.cpp
 +++ b/opengl/system/OpenglSystemCommon/HostConnection.cpp
-@@ -16,6 +16,7 @@
+@@ -16,7 +16,9 @@
  #include "HostConnection.h"
  #include "TcpStream.h"
  #include "QemuPipeStream.h"
 +#include "RenderdStream.h"
  #include "ThreadInfo.h"
++#include <unistd.h>
  #include <cutils/log.h>
  #include "GLEncoder.h"
-@@ -61,7 +62,8 @@ HostConnection *HostConnection::get()
+ #include "GL2Encoder.h"
+@@ -54,6 +56,32 @@ HostConnection *HostConnection::get()
+         return NULL;
+     }
+ 
++    // Fork safety. Every Android app is forked from zygote and this thread's
++    // TLS (a dedicated bionic slot) is inherited across fork(), taking the
++    // parent's connection - and therefore the parent's socket - with it.
++    // Several processes writing one socket interleave at send() granularity,
++    // so a message's 40-byte header can be separated from its payload and
++    // glrenderd's command stream loses framing for good.
++    //
++    // The owning pid lives here rather than in the class on purpose:
++    // flush() is an inline method, so every already-built guest library has
++    // inlined it with hard-coded member offsets. Adding a member would shift
++    // them and crash those libraries (that is what broke surfaceflinger once).
++    static pid_t s_ownerPid = -1;
++    pid_t me = getpid();
++    if (s_ownerPid != me) {
++        if (tinfo->hostConn) {   // created by the process we were forked from
++            delete tinfo->hostConn;
++            tinfo->hostConn = NULL;
++        }
++        s_ownerPid = me;
++    }
++
++    // POPLAR: do NOT delete the connection here. The EGL layer caches pointers
++    // to these encoders, so freeing them is a use-after-free that crashes the
++    // app on its next GL call. A dead stream now reconnects itself in place
++    // (see RenderdStream::reconnectIfDead).
++
+     if (tinfo->hostConn == NULL) {
+         HostConnection *con = new HostConnection();
+         if (NULL == con) {
+@@ -61,7 +89,8 @@ HostConnection *HostConnection::get()
          }
  
          if (useQemuPipe) {
@@ -188,82 +437,6 @@ index 940f5ae..a225954 100644
              if (!stream) {
                  ALOGE("Failed to create QemuPipeStream for host connection!!!\n");
                  delete con;
-diff --git a/opengl/system/OpenglSystemCommon/RenderdStream.cpp b/opengl/system/OpenglSystemCommon/RenderdStream.cpp
-new file mode 100644
-index 0000000..fcba750
---- /dev/null
-+++ b/opengl/system/OpenglSystemCommon/RenderdStream.cpp
-@@ -0,0 +1,42 @@
-+// ported from pdx203-jellybean by @chardidathing, https://github.com/chardidathing/pdx203-jellybean
-+#include "RenderdStream.h"
-+#include <cutils/sockets.h>
-+#include <pthread.h>
-+#include <unistd.h>
-+
-+static const char kSocketName[] = "glrenderd";
-+// shipped only when the chroot was staged, without it there's nothing to wait for
-+static const char kRenderdBinary[] = "/system/glr/root/glrenderd";
-+// glrenderd starts in post-fs-data, surfaceflinger can still beat it to the socket
-+static const int kWaitTries = 50;
-+static const useconds_t kWaitStepUs = 100000;
-+
-+int RenderdStream::connect(unsigned short port)
-+{
-+    m_sock = socket_local_client(kSocketName, ANDROID_SOCKET_NAMESPACE_ABSTRACT, SOCK_STREAM);
-+    return valid() ? 0 : -1;
-+}
-+
-+static bool s_available;
-+static pthread_once_t s_availableOnce = PTHREAD_ONCE_INIT;
-+
-+static void probe()
-+{
-+    if (access(kRenderdBinary, F_OK))
-+        return;
-+    for (int i = 0; i < kWaitTries; i++) {
-+        int fd = socket_local_client(kSocketName, ANDROID_SOCKET_NAMESPACE_ABSTRACT, SOCK_STREAM);
-+        if (fd >= 0) {
-+            close(fd);
-+            s_available = true;
-+            return;
-+        }
-+        usleep(kWaitStepUs);
-+    }
-+}
-+
-+bool RenderdStream::available()
-+{
-+    pthread_once(&s_availableOnce, probe);
-+    return s_available;
-+}
-diff --git a/opengl/system/OpenglSystemCommon/RenderdStream.h b/opengl/system/OpenglSystemCommon/RenderdStream.h
-new file mode 100644
-index 0000000..15d272d
---- /dev/null
-+++ b/opengl/system/OpenglSystemCommon/RenderdStream.h
-@@ -0,0 +1,22 @@
-+// ported from pdx203-jellybean by @chardidathing, https://github.com/chardidathing/pdx203-jellybean
-+#ifndef __RENDERD_STREAM_H
-+#define __RENDERD_STREAM_H
-+
-+#include "SocketStream.h"
-+
-+// talks to glrenderd, the adreno renderer running in the lineage chroot,
-+// over an abstract unix socket instead of the emulator's qemu pipe
-+class RenderdStream : public SocketStream {
-+public:
-+    explicit RenderdStream(size_t bufsize = 10000) : SocketStream(bufsize) {}
-+    virtual int listen(unsigned short port) { return -1; }
-+    virtual SocketStream *accept() { return NULL; }
-+    virtual int connect(unsigned short port);
-+    int connect() { return connect(0); }
-+
-+    // whether this process should use glrenderd at all, decided once. the egl loader in
-+    // frameworks/native makes the same call so gralloc and egl never disagree
-+    static bool available();
-+};
-+
-+#endif
 diff --git a/opengl/system/gralloc/Android.mk b/opengl/system/gralloc/Android.mk
 index 8705602..18b56d2 100644
 --- a/opengl/system/gralloc/Android.mk
@@ -280,7 +453,7 @@ index 8705602..18b56d2 100644
  $(call emugl-set-shared-library-subpath,hw)
  
 diff --git a/opengl/system/gralloc/gralloc.cpp b/opengl/system/gralloc/gralloc.cpp
-index 6250a2f..57eeae3 100644
+index 6250a2f..e963851 100644
 --- a/opengl/system/gralloc/gralloc.cpp
 +++ b/opengl/system/gralloc/gralloc.cpp
 @@ -27,6 +27,7 @@
@@ -291,7 +464,36 @@ index 6250a2f..57eeae3 100644
  #include "glUtils.h"
  #include <cutils/log.h>
  #include <cutils/properties.h>
-@@ -1024,14 +1025,13 @@ struct private_module_t HAL_MODULE_INFO_SYM = {
+@@ -665,23 +666,11 @@ static int gralloc_lock(gralloc_module_t const* module,
+     }
+ 
+     if (cb->hostHandle) {
+-        // Make sure we have host connection
+-        DEFINE_AND_VALIDATE_HOST_CONNECTION;
+-
+-        //
+-        // flush color buffer write cache on host and get its sync status.
+-        //
+-        int hostSyncStatus = rcEnc->rcColorBufferCacheFlush(rcEnc, cb->hostHandle,
+-                                                            postCount,
+-                                                            sw_read);
+-        if (hostSyncStatus < 0) {
+-            // host failed the color buffer sync - probably since it was already
+-            // locked for write access. fail the lock.
+-            ALOGE("gralloc_lock cacheFlush failed postCount=%d sw_read=%d\n",
+-                 postCount, sw_read);
+-            return -EBUSY;
+-        }
+-
++        // The host's rcColorBufferCacheFlush is a no-op stub, but it is a
++        // synchronous round-trip that blocks the caller - and it queues behind
++        // heavy GL work, freezing the app UI. Skip it entirely.
++        (void)postCount;
++        (void)sw_read;
+     }
+ 
+     //
+@@ -1024,14 +1013,13 @@ struct private_module_t HAL_MODULE_INFO_SYM = {
  static void
  fallback_init(void)
  {

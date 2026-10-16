@@ -1,5 +1,60 @@
 ported from pdx203-jellybean by @chardidathing, https://github.com/chardidathing/pdx203-jellybean
 
+diff --git a/emulator/opengl/host/include/libOpenglRender/IOStream.h b/emulator/opengl/host/include/libOpenglRender/IOStream.h
+index 445ec17..0c6eb6f 100644
+--- a/emulator/opengl/host/include/libOpenglRender/IOStream.h
++++ b/emulator/opengl/host/include/libOpenglRender/IOStream.h
+@@ -41,6 +41,14 @@ public:
+         // NOTE: m_buf is 'owned' by the child class thus we expect it to be released by it
+     }
+ 
++    // MAPLE: host-side renderer helpers, called by RenderThread's diagnostics
++    // and drop path through IOStream*. Appended after every pre-existing
++    // virtual on purpose: the guest encoder libraries resolve the methods
++    // above by fixed vtable slots, so their positions must not move. Only the
++    // SDK (host) tree declares these; SocketStream overrides both.
++    virtual int peerPid() { return -1; }
++    virtual void shutdownStream() {}
++
+     unsigned char *alloc(size_t len) {
+ 
+         if (m_buf && len > m_free) {
+diff --git a/emulator/opengl/host/libs/libOpenglRender/ColorBuffer.cpp b/emulator/opengl/host/libs/libOpenglRender/ColorBuffer.cpp
+index 5f04a97..6b85842 100644
+--- a/emulator/opengl/host/libs/libOpenglRender/ColorBuffer.cpp
++++ b/emulator/opengl/host/libs/libOpenglRender/ColorBuffer.cpp
+@@ -369,3 +369,17 @@ void ColorBuffer::readback(unsigned char* img)
+         fb->unbind_locked();
+     }
+ }
++
++// MAPLE (TEST 35): same as readback(), but the caller picks the destination -
++// a presenter slot (poplar A6) or NULL while a PBO is bound (async readback)
++void ColorBuffer::readbackTo(unsigned char* dst)
++{
++    FrameBuffer *fb = FrameBuffer::getFB();
++    if (fb->bind_locked()) {
++        if (bind_fbo()) {
++            s_gl.glReadPixels(0, 0, m_width, m_height,
++                    GL_RGBA, GL_UNSIGNED_BYTE, dst);
++        }
++        fb->unbind_locked();
++    }
++}
+diff --git a/emulator/opengl/host/libs/libOpenglRender/ColorBuffer.h b/emulator/opengl/host/libs/libOpenglRender/ColorBuffer.h
+index d481891..3d166c0 100644
+--- a/emulator/opengl/host/libs/libOpenglRender/ColorBuffer.h
++++ b/emulator/opengl/host/libs/libOpenglRender/ColorBuffer.h
+@@ -38,6 +38,9 @@ public:
+     bool bindToRenderbuffer();
+     bool blitFromCurrentReadBuffer();
+     void readback(unsigned char* img);
++    // MAPLE (TEST 35): readback to an arbitrary destination; NULL reads into
++    // the currently bound GL_PIXEL_PACK_BUFFER (async readback)
++    void readbackTo(unsigned char* dst);
+ 
+ private:
+     ColorBuffer();
 diff --git a/emulator/opengl/host/libs/libOpenglRender/FBConfig.cpp b/emulator/opengl/host/libs/libOpenglRender/FBConfig.cpp
 index 089f1da..ea88637 100644
 --- a/emulator/opengl/host/libs/libOpenglRender/FBConfig.cpp
@@ -44,20 +99,84 @@ index 089f1da..ea88637 100644
      for (int i=0; i<s_numConfigAttribs; i++) {
          m_attribValues[i] = 0;
 diff --git a/emulator/opengl/host/libs/libOpenglRender/FrameBuffer.cpp b/emulator/opengl/host/libs/libOpenglRender/FrameBuffer.cpp
-index 2c9e8c5..b492910 100644
+index 2c9e8c5..e940b96 100644
 --- a/emulator/opengl/host/libs/libOpenglRender/FrameBuffer.cpp
 +++ b/emulator/opengl/host/libs/libOpenglRender/FrameBuffer.cpp
-@@ -23,6 +23,9 @@
+@@ -22,6 +22,18 @@
+ #include "ThreadInfo.h"
  #include <stdio.h>
  #include "TimeUtils.h"
- 
++#include <dlfcn.h>
++#include <stdlib.h>
++#include <string.h>
++#include <sys/system_properties.h>
++
++// MAPLE (TEST 35): GL enums the emulator's ES2-era codec tables never carried
++#define GLR_GL_PIXEL_PACK_BUFFER 0x88EB
++#define GLR_GL_STREAM_READ       0x88E1
++#define GLR_GL_MAP_READ_BIT      0x0001
++
 +// glrenderd reads this for its per-frame timing
 +long long s_readbackMs;
-+
+ 
  FrameBuffer *FrameBuffer::s_theFrameBuffer = NULL;
  HandleType FrameBuffer::s_nextHandle = 0;
+@@ -372,11 +384,23 @@ FrameBuffer::FrameBuffer(int p_width, int p_height) :
+     m_onPost(NULL),
+     m_onPostContext(NULL),
+     m_fbImage(NULL),
++    m_onReadbackAcquire(NULL),
++    m_onReadbackContext(NULL),
++    m_readPboIndex(0),
++    m_readPboPending(0),
++    m_asyncReadback(-1),
++    m_asyncCheckMs(0),
++    m_glGenBuffers(NULL),
++    m_glBindBuffer(NULL),
++    m_glBufferData(NULL),
++    m_glMapBufferRange(NULL),
++    m_glUnmapBuffer(NULL),
+     m_glVendor(NULL),
+     m_glRenderer(NULL),
+     m_glVersion(NULL)
+ {
+     m_fpsStats = getenv("SHOW_FPS_STATS") != NULL;
++    m_readPbo[0] = m_readPbo[1] = 0;
+ }
  
-@@ -807,8 +810,15 @@ bool FrameBuffer::post(HandleType p_colorbuffer, bool needLock)
+ FrameBuffer::~FrameBuffer()
+@@ -384,6 +408,30 @@ FrameBuffer::~FrameBuffer()
+     free(m_fbImage);
+ }
+ 
++// MAPLE (TEST 35): the PBO entry points the emulator's dispatch never needed.
++// Resolved from the very same driver lib the dispatch uses; all host-side, no
++// guest protocol change, nothing to rebuild on the device side.
++static void* glr_glsym(const char* name)
++{
++    static void* s_lib = (void*)-1;
++    if (s_lib == (void*)-1) {
++        const char* path = getenv("ANDROID_GLESv2_LIB");
++        s_lib = dlopen(path ? path : "libGLESv2.so", RTLD_NOW | RTLD_GLOBAL);
++        if (!s_lib) {
++            ERR("glr: dlopen(%s) failed: %s\n", path ? path : "libGLESv2.so", dlerror());
++            s_lib = NULL;
++        }
++    }
++    return s_lib ? dlsym(s_lib, name) : NULL;
++}
++
++void FrameBuffer::setPostReadback(OnReadbackAcquireFn acquire, void* context)
++{
++    android::Mutex::Autolock mutex(m_lock);
++    m_onReadbackAcquire = acquire;
++    m_onReadbackContext = context;
++}
++
+ void FrameBuffer::setPostCallback(OnPostFn onPost, void* onPostContext)
+ {
+     android::Mutex::Autolock mutex(m_lock);
+@@ -807,8 +855,98 @@ bool FrameBuffer::post(HandleType p_colorbuffer, bool needLock)
  
          m_lastPostedColorBuffer = p_colorbuffer;
          if (!m_subWin) {
@@ -65,13 +184,770 @@ index 2c9e8c5..b492910 100644
 -            // cannot post the colorbuffer
 +            // headless (glrenderd), no window to draw into, hand the pixels straight to the callback
 +            if (m_onPost) {
-+                long long t0 = GetCurrentTimeMS();
-+                (*c).second.cb->readback(m_fbImage);
-+                s_readbackMs += GetCurrentTimeMS() - t0;
-+                m_onPost(m_onPostContext, m_width, m_height, -1,
-+                        GL_RGBA, GL_UNSIGNED_BYTE, m_fbImage);
-+                ret = true;
++                // MAPLE (TEST 35): async readback is opt-in at runtime
++                long long nowMs = GetCurrentTimeMS();
++                if (m_asyncReadback < 0 || nowMs - m_asyncCheckMs > 1000) {
++                    char v[PROP_VALUE_MAX];
++                    m_asyncReadback = (__system_property_get("persist.glr.asyncreadback", v) > 0
++                                       && atoi(v) != 0) ? 1 : 0;
++                    m_asyncCheckMs = nowMs;
++                    if (m_asyncReadback && !m_glMapBufferRange) {
++                        m_glGenBuffers     = glr_glsym("glGenBuffers");
++                        m_glBindBuffer     = glr_glsym("glBindBuffer");
++                        m_glBufferData     = glr_glsym("glBufferData");
++                        m_glMapBufferRange = glr_glsym("glMapBufferRange");
++                        m_glUnmapBuffer    = glr_glsym("glUnmapBuffer");
++                        if (!m_glGenBuffers || !m_glBindBuffer || !m_glBufferData ||
++                            !m_glMapBufferRange || !m_glUnmapBuffer) {
++                            ERR("glr: async readback unavailable, falling back\n");
++                            m_asyncReadback = 0;
++                        }
++                    }
++                }
++                if (m_asyncReadback) {
++                    typedef void  (*PFNGen)(int, unsigned int*);
++                    typedef void  (*PFNBind)(unsigned int, unsigned int);
++                    typedef void  (*PFNData)(unsigned int, long, const void*, unsigned int);
++                    typedef void* (*PFNMap)(unsigned int, long, long, unsigned int);
++                    typedef unsigned char (*PFNUnmap)(unsigned int);
++                    PFNGen gen = (PFNGen)m_glGenBuffers;
++                    PFNBind bind = (PFNBind)m_glBindBuffer;
++                    PFNData data = (PFNData)m_glBufferData;
++                    PFNMap map = (PFNMap)m_glMapBufferRange;
++                    PFNUnmap unmap = (PFNUnmap)m_glUnmapBuffer;
++                    long size = (long)m_width * m_height * 4;
++                    int cur = m_readPboIndex;
++                    int nxt = cur ^ 1;
++
++                    if (m_readPbo[0] == 0)
++                        gen(2, m_readPbo);
++
++                    // publish what the other PBO was filled with last round;
++                    // its map only waits if the GPU is not done yet
++                    if (m_readPboPending) {
++                        bind(GLR_GL_PIXEL_PACK_BUFFER, m_readPbo[cur]);
++                        void* p = map(GLR_GL_PIXEL_PACK_BUFFER, 0, size, GLR_GL_MAP_READ_BIT);
++                        if (p) {
++                            int w = m_width, h = m_height;
++                            unsigned char* dst = NULL;
++                            if (m_onReadbackAcquire)
++                                dst = m_onReadbackAcquire(m_onReadbackContext, &w, &h);
++                            if (!dst) dst = m_fbImage;
++                            memcpy(dst, p, (size_t)size);
++                            unmap(GLR_GL_PIXEL_PACK_BUFFER);
++                            m_onPost(m_onPostContext, m_width, m_height, -1,
++                                     GL_RGBA, GL_UNSIGNED_BYTE, dst);
++                        }
++                        bind(GLR_GL_PIXEL_PACK_BUFFER, 0);
++                        m_readPboPending = 0;
++                    }
++
++                    // queue this frame's readback; returns once the GPU copy
++                    // is queued, the wait moves to the next post's map
++                    bind(GLR_GL_PIXEL_PACK_BUFFER, m_readPbo[nxt]);
++                    data(GLR_GL_PIXEL_PACK_BUFFER, size, NULL, GLR_GL_STREAM_READ);
++                    {
++                        long long t0 = GetCurrentTimeMS();
++                        (*c).second.cb->readbackTo(NULL);   // into the bound PBO
++                        s_readbackMs += GetCurrentTimeMS() - t0;
++                    }
++                    bind(GLR_GL_PIXEL_PACK_BUFFER, 0);
++                    m_readPboIndex = nxt;
++                    m_readPboPending = 1;
++                    ret = true;
++                } else {
++                    m_readPboPending = 0;
++                    unsigned char* dst = m_fbImage;
++                    if (m_onReadbackAcquire) {
++                        int w = m_width, h = m_height;
++                        unsigned char* p = m_onReadbackAcquire(m_onReadbackContext, &w, &h);
++                        if (p) dst = p;
++                    }
++                    long long t0 = GetCurrentTimeMS();
++                    if (dst == m_fbImage)
++                        (*c).second.cb->readback(m_fbImage);
++                    else
++                        (*c).second.cb->readbackTo(dst);   // MAPLE (poplar A6)
++                    s_readbackMs += GetCurrentTimeMS() - t0;
++                    m_onPost(m_onPostContext, m_width, m_height, -1,
++                            GL_RGBA, GL_UNSIGNED_BYTE, dst);
++                    ret = true;
++                }
 +            }
              if (needLock) m_lock.unlock();
              return ret;
          }
+diff --git a/emulator/opengl/host/libs/libOpenglRender/FrameBuffer.h b/emulator/opengl/host/libs/libOpenglRender/FrameBuffer.h
+index de0b71c..ce551b6 100644
+--- a/emulator/opengl/host/libs/libOpenglRender/FrameBuffer.h
++++ b/emulator/opengl/host/libs/libOpenglRender/FrameBuffer.h
+@@ -61,6 +61,13 @@ public:
+ 
+     void setPostCallback(OnPostFn onPost, void* onPostContext);
+ 
++    // MAPLE (poplar A6 + TEST 35): lets the presenter pick where the post
++    // readback lands (a presenter slot) instead of the internal buffer, and
++    // (with persist.glr.asyncreadback) runs the readback through a ping-pong
++    // PBO so the GPU wait is off the posting thread's path.
++    typedef unsigned char* (*OnReadbackAcquireFn)(void* context, int* width, int* height);
++    void setPostReadback(OnReadbackAcquireFn acquire, void* context);
++
+     void getGLStrings(const char** vendor, const char** renderer, const char** version) const {
+         *vendor = m_glVendor;
+         *renderer = m_glRenderer;
+@@ -142,6 +149,20 @@ private:
+     void* m_onPostContext;
+     unsigned char* m_fbImage;
+ 
++    // MAPLE (TEST 35): readback-destination hook + async readback state
++    OnReadbackAcquireFn m_onReadbackAcquire;
++    void* m_onReadbackContext;
++    unsigned int m_readPbo[2];
++    int m_readPboIndex;
++    int m_readPboPending;
++    int m_asyncReadback;          // -1 unknown, 0 off, 1 on
++    long long m_asyncCheckMs;
++    void* m_glGenBuffers;
++    void* m_glBindBuffer;
++    void* m_glBufferData;
++    void* m_glMapBufferRange;
++    void* m_glUnmapBuffer;
++
+     const char* m_glVendor;
+     const char* m_glRenderer;
+     const char* m_glVersion;
+diff --git a/emulator/opengl/host/libs/libOpenglRender/ReadBuffer.cpp b/emulator/opengl/host/libs/libOpenglRender/ReadBuffer.cpp
+index 837b094..f26a5df 100644
+--- a/emulator/opengl/host/libs/libOpenglRender/ReadBuffer.cpp
++++ b/emulator/opengl/host/libs/libOpenglRender/ReadBuffer.cpp
+@@ -41,8 +41,22 @@ int ReadBuffer::getData()
+     // get fresh data into the buffer;
+     size_t len = m_size - m_validData;
+     if (len==0) {
+-        //we need to inc our buffer
++        // A packet we cannot consume (bad/duplicated length, or a peer that stops
++        // mid-packet) used to make the buffer double without bound until the
++        // realloc hit ~2GB and killed the render thread. Cap it, and treat a
++        // still-stuck buffer as a broken client so the connection is dropped
++        // instead of taking the whole render thread down.
++        // 32 MiB is ~4x the largest legal single message (a full 1080x1920
++        // RGBA colour-buffer update is 8.3 MB). If we are full at this size
++        // the stream is desynced: the decoder needs the whole packetLen
++        // before it will dispatch anything (see *_dec.cpp), so a head that
++        // declares a length the peer never sends holds the buffer forever.
++        if (m_size >= (32u<<20)) {
++            ERR("ReadBuffer stuck at %zu bytes with no progress; dropping client\n", m_size);
++            return -1;
++        }
+         size_t new_size = m_size*2;
++        if (new_size > (32u<<20)) new_size = (32u<<20);
+         unsigned char* new_buf;
+         if (new_size < m_size) { // overflow check
+             new_size = INT_MAX;
+diff --git a/emulator/opengl/host/libs/libOpenglRender/RenderThread.cpp b/emulator/opengl/host/libs/libOpenglRender/RenderThread.cpp
+index 1b2c0fe..536daa5 100644
+--- a/emulator/opengl/host/libs/libOpenglRender/RenderThread.cpp
++++ b/emulator/opengl/host/libs/libOpenglRender/RenderThread.cpp
+@@ -23,7 +23,16 @@
+ #include "EGLDispatch.h"
+ #include "FrameBuffer.h"
+ 
+-#define STREAM_BUFFER_SIZE 4*1024*1024
++#include <string.h>
++#include <stdlib.h>
++
++// start small and let ReadBuffer::getData() grow it (bounded at 32 MiB);
++// several clients each hold one of these
++#define STREAM_BUFFER_SIZE 8*1024*1024
++
++// No legal single message here comes close to this (the biggest are a full
++// 1080x1920 RGBA colour-buffer push at 8.3 MB and texture uploads at ~12 MB).
++#define GLR_MAX_MSG (24u<<20)
+ 
+ RenderThread::RenderThread() :
+     osUtils::Thread(),
+@@ -49,6 +58,136 @@ RenderThread *RenderThread::create(IOStream *p_stream)
+     return rt;
+ }
+ 
++/* --- glr diag ------------------------------------------------------------ */
++// Ring of the last commands seen on this connection. Recorded per command, not
++// per decoder call, so the entry immediately before a framing loss is the one
++// whose declared length was wrong.
++#define GLR_RING 32
++typedef struct { int op; unsigned int plen; int len; unsigned int f[8]; } GlrEntry;
++static __thread GlrEntry g_glr_ring[GLR_RING];
++static __thread int g_glr_ringn = 0;
++
++static inline unsigned int glr_rd32(const unsigned char* p) {
++    unsigned int v = 0;
++    memcpy(&v, p, 4);
++    return v;
++}
++
++static void glr_record(int op, unsigned int plen, int len,
++                       const unsigned char* head, size_t avail) {
++    int idx = g_glr_ringn % GLR_RING;
++    g_glr_ring[idx].op = op;
++    g_glr_ring[idx].plen = plen;
++    g_glr_ring[idx].len = len;
++    for (int i = 0; i < 8; i++)
++        g_glr_ring[idx].f[i] = (avail >= (size_t)(12 + 4*i)) ? glr_rd32(head + 8 + 4*i) : 0;
++    g_glr_ringn++;
++}
++
++// The three opcode spaces are dense and disjoint (checked against the generated
++// tables): GLESv1 1024..1315, GLESv2 2048..2256, renderControl 10000..10025.
++static inline bool glr_known_op(int op) {
++    return (op >= 1024  && op <= 1315) ||
++           (op >= 2048  && op <= 2256) ||
++           (op >= 10000 && op <= 10025);
++}
++
++static void glr_dump_ring(int pid, const unsigned char* head, size_t avail) {
++    int m = avail < 64 ? (int)avail : 64;
++    fprintf(stderr, "[glr-rt] FRAMING LOST pid=%d avail=%u head:", pid, (unsigned)avail);
++    for (int i = 0; i < m; i++) fprintf(stderr, " %02x", head[i]);
++    fprintf(stderr, "\n");
++    // last 8 commands, with the raw header words (cb x y w h fmt type size)
++    for (int i = 8; i > 0; i--) {
++        int k = g_glr_ringn - i;
++        if (k < 0) continue;
++        const GlrEntry* e = &g_glr_ring[k % GLR_RING];
++        fprintf(stderr, "[glr-rt]   last[%d] op=%d plen=%u consumed=%d"
++                        " cb=%u x=%u y=%u w=%u h=%u fmt=0x%x type=0x%x size=%u\n",
++                -i, e->op, e->plen, e->len,
++                e->f[0], e->f[1], e->f[2], e->f[3], e->f[4], e->f[5], e->f[6], e->f[7]);
++    }
++    fflush(stderr);
++}
++
++// Find the next real message boundary. Candidate offsets are rare (the opcode
++// has to be one of ~530 values), so we can walk forward from a candidate and
++// require a run of well-formed messages rather than trusting a single match.
++// Note: since the guest fork-safety fix in HostConnection this path no longer
++// triggers in practice - it is a safety net.
++#define GLR_RESYNC_RUN 2
++static size_t glr_resync(const unsigned char* buf, size_t avail) {
++    for (size_t off = 4; off + 8 <= avail; off += 4) {
++        unsigned int op = glr_rd32(buf + off);
++        if (!glr_known_op((int)op)) continue;
++        unsigned int plen = glr_rd32(buf + off + 4);
++        if (plen < 8 || plen > GLR_MAX_MSG) continue;
++
++        size_t p = off;
++        int run = 0;
++        bool ok = true;
++        while (run < GLR_RESYNC_RUN && p + 8 <= avail) {
++            unsigned int o = glr_rd32(buf + p);
++            unsigned int l = glr_rd32(buf + p + 4);
++            if (!glr_known_op((int)o) || l < 8 || l > GLR_MAX_MSG) { ok = false; break; }
++            if (p + l > avail) break;      // ran out of buffered data mid-run
++            p += l;
++            run++;
++        }
++        // accept a long run, or whatever we could verify if the buffer ends
++        if (ok && run >= ((avail - off) > (size_t)GLR_MAX_MSG ? GLR_RESYNC_RUN : 2))
++            return off;
++    }
++    return 0;
++}
++
++/* --- raw stream history -------------------------------------------------- */
++// A rolling copy of everything this connection sent, so the first framing loss
++// can be written out with its cause intact. 12 MiB covers the largest message
++// (8.3 MB) plus the ones before it.
++#define GLR_HIST (12u<<20)
++static __thread unsigned char* g_hist;
++static __thread size_t g_histPos;
++static __thread size_t g_histTotal;
++static __thread bool g_histSaved;
++
++static void glr_hist_append(const unsigned char* p, size_t n) {
++    if (!g_hist) {
++        g_hist = (unsigned char*)malloc(GLR_HIST);
++        if (!g_hist) return;
++    }
++    while (n) {
++        size_t chunk = GLR_HIST - g_histPos;
++        if (chunk > n) chunk = n;
++        memcpy(g_hist + g_histPos, p, chunk);
++        g_histPos = (g_histPos + chunk) % GLR_HIST;
++        g_histTotal += chunk;
++        p += chunk;
++        n -= chunk;
++    }
++}
++
++static void glr_hist_save(int pid) {
++    if (g_histSaved || !g_hist || g_histTotal == 0) return;
++    g_histSaved = true;
++    char path[64];
++    snprintf(path, sizeof(path), "/dev/glr-stream-%d.bin", pid);
++    FILE* f = fopen(path, "wb");
++    if (!f) {
++        fprintf(stderr, "[glr-rt] could not open %s for stream history\n", path);
++        fflush(stderr);
++        return;
++    }
++    size_t start = (g_histTotal >= GLR_HIST) ? g_histPos : 0;
++    size_t len   = (g_histTotal >= GLR_HIST) ? GLR_HIST : g_histPos;
++    fwrite(g_hist + start, 1, GLR_HIST - start, f);
++    if (start) fwrite(g_hist, 1, start, f);
++    fclose(f);
++    fprintf(stderr, "[glr-rt] wrote %u bytes of stream history to %s\n",
++            (unsigned)len, path);
++    fflush(stderr);
++}
++
+ int RenderThread::Main()
+ {
+     RenderThreadInfo tInfo;
+@@ -81,10 +220,29 @@ int RenderThread::Main()
+         delete [] fname;
+     }
+ 
++    const int peerPid = m_stream->peerPid();
++    fprintf(stderr, "[glr-rt] client pid=%d\n", peerPid);
++    fflush(stderr);
++
++    bool desynced = false;
++
++    // TEST 35: window-surface swap timings (see the op checks in the loop)
++    long long swFlushMs = 0, swSwapSum = 0, swGapSum = 0, swLastSetMs = 0;
++    unsigned long swCount = 0;
++
+     while (1) {
+ 
+         int stat = readBuf.getData();
+         if (stat <= 0) {
++            // client gone, or its stream is unparseable. Tear the socket down
++            // so a guest blocked in send() gets EPIPE and can recover.
++            // Logged because a guest that gave up waiting for a reply (see
++            // SocketStream.cpp in the guest) shows up here as a drop followed by
++            // a fresh "client pid=" line - which is how we tell "the renderer
++            // wedged" from "the app crashed".
++            fprintf(stderr, "[glr-rt] client pid=%d dropped (getData=%d)\n", peerPid, stat);
++            fflush(stderr);
++            m_stream->shutdownStream();
+             break;
+         }
+ 
+@@ -109,38 +267,142 @@ int RenderThread::Main()
+             fflush(dumpFP);
+         }
+ 
++        {
++            size_t vd = readBuf.validData();
++            if (vd >= (size_t)stat)
++                glr_hist_append(readBuf.buf() + (vd - stat), (size_t)stat);
++        }
++
+         bool progress;
+         do {
+             progress = false;
+ 
+-            //
+-            // try to process some of the command buffer using the GLESv1 decoder
+-            //
+-            size_t last = tInfo.m_glDec.decode(readBuf.buf(), readBuf.validData(), m_stream);
++            size_t avail = readBuf.validData();
++            if (avail < 8) break;
++
++            unsigned char* head = readBuf.buf();
++            int op = (int)glr_rd32(head);
++            unsigned int plen = glr_rd32(head + 4);
++
++            // TEST 35: a window-surface swap is rcFlushWindowColorBuffer
++            // (start) .. queue/dequeue (guest-side) .. rcSetWindowColorBuffer
++            // (end). flush->set is how long the client was blocked inside
++            // eglSwapBuffers; set->next flush is its own frame work.
++            if (op == 10016) {          // OP_rcFlushWindowColorBuffer
++                long long nowMs = GetCurrentTimeMS();
++                if (swLastSetMs)
++                    swGapSum += nowMs - swLastSetMs;
++                swFlushMs = nowMs;
++            } else if (op == 10015) {   // OP_rcSetWindowColorBuffer
++                long long nowMs = GetCurrentTimeMS();
++                if (swFlushMs) {
++                    swSwapSum += nowMs - swFlushMs;
++                    swFlushMs = 0;
++                    if (++swCount >= 60) {
++                        fprintf(stderr, "[glr-rt] client pid=%d swaps=60 blocked avg %.1fms, frame gap avg %.1fms\n",
++                                peerPid, (double)swSwapSum / swCount, (double)swGapSum / swCount);
++                        fflush(stderr);
++                        swSwapSum = swGapSum = 0;
++                        swCount = 0;
++                    }
++                }
++                swLastSetMs = nowMs;
++            }
++
++            // rcUpdateColorBuffer's header is 40 bytes: opcode, packetLen, then
++            // cb x y w h fmt type size_pixels. The guest's headers all check out
++            // (packetLen == 40 + w*h*bpp exactly), so framing by packetLen is
++            // right *provided the payload actually arrives*. When it does not,
++            // the byte at offset 40 is the next message's opcode - log that, and
++            // do NOT second-guess the length.
++            if (op == 10024 && avail >= 48) {
++                unsigned int sizeFld  = glr_rd32(head + 36);
++                unsigned int nextOp   = glr_rd32(head + 40);
++                unsigned int nextPlen = glr_rd32(head + 44);
++                bool nextLooksReal = glr_known_op((int)nextOp) &&
++                                     nextPlen >= 8 && nextPlen <= GLR_MAX_MSG;
++                if (nextLooksReal && avail >= (size_t)(48 + nextPlen + 8)) {
++                    // require the command after that one to look real too - two
++                    // hits in a row is not something pixel data produces
++                    if (!glr_known_op((int)glr_rd32(head + 40 + nextPlen)))
++                        nextLooksReal = false;
++                }
++                if (nextLooksReal && plen > 40) {
++                    // The 40-byte header is followed directly by the next message:
++                    // this update's payload never made it onto the wire (the peer's
++                    // write failed and the error was swallowed). Skip exactly the
++                    // header so the stream stays framed, instead of consuming
++                    // packetLen and eating every message behind it.
++                    fprintf(stderr, "[glr-rt] NOPAYLOAD pid=%d op=10024 plen=%u size_field=%u next_op=%u"
++                                    " -> payload of %u bytes never arrived, skipping header\n",
++                            peerPid, plen, sizeFld, nextOp, plen - 40);
++                    fflush(stderr);
++                    readBuf.consume(40);
++                    progress = true;
++                    continue;
++                }
++            }
++
++            if (!glr_known_op(op) || plen < 8 || plen > GLR_MAX_MSG) {
++                // Nothing can consume this. The stream lost framing: some
++                // earlier message's declared length did not match what was
++                // written, so payload bytes now sit where a header should be.
++                // Report it once, then skip to the next usable boundary. If
++                // there is not one yet, wait for more data - the mis-framed
++                // message is still draining, and ReadBuffer's cap is the
++                // backstop if it never recovers.
++                if (!desynced) {
++                    desynced = true;
++                    glr_dump_ring(peerPid, head, avail);
++                    glr_hist_save(peerPid);
++                }
++                size_t off = glr_resync(head, avail);
++                if (off > 0) {
++                    fprintf(stderr, "[glr-rt] RESYNC pid=%d skipped=%u resuming at op=%u\n",
++                            peerPid, (unsigned)off, glr_rd32(head + off));
++                    fflush(stderr);
++                    readBuf.consume(off);
++                    desynced = false;
++                    progress = true;
++                    continue;
++                }
++                break;   // wait for more data
++            }
++            desynced = false;
++
++            // Hand a decoder at most one declared message. The decoders trust
++            // packetLen and advance by it, so feeding them the whole buffer
++            // lets a single wrong length eat every command after it.
++            size_t lim = (plen <= avail) ? (size_t)plen : avail;
++
++            size_t last = tInfo.m_glDec.decode(head, lim, m_stream);
+             if (last > 0) {
+-                progress = true;
++                glr_record(op, plen, (int)last, head, avail);
+                 readBuf.consume(last);
++                progress = true;
++                continue;
+             }
+ 
+-            //
+-            // try to process some of the command buffer using the GLESv2 decoder
+-            //
+-            last = tInfo.m_gl2Dec.decode(readBuf.buf(), readBuf.validData(), m_stream);
++            last = tInfo.m_gl2Dec.decode(head, lim, m_stream);
+             if (last > 0) {
+-                progress = true;
++                glr_record(op, plen, (int)last, head, avail);
+                 readBuf.consume(last);
++                progress = true;
++                continue;
+             }
+ 
+-            //
+-            // try to process some of the command buffer using the
+-            // renderControl decoder
+-            //
+-            last = m_rcDec.decode(readBuf.buf(), readBuf.validData(), m_stream);
++            last = m_rcDec.decode(head, lim, m_stream);
+             if (last > 0) {
++                glr_record(op, plen, (int)last, head, avail);
+                 readBuf.consume(last);
+                 progress = true;
++                continue;
+             }
+ 
++            // Known opcode, but no decoder took it, or the whole message has
++            // not arrived yet. Wait for more data.
++            break;
++
+         } while( progress );
+ 
+     }
+@@ -159,6 +421,7 @@ int RenderThread::Main()
+ 
+     //
+     // flag that this thread has finished execution
++    //
+     m_finished = true;
+ 
+     return 0;
+diff --git a/emulator/opengl/shared/OpenglCodecCommon/SocketStream.cpp b/emulator/opengl/shared/OpenglCodecCommon/SocketStream.cpp
+index f7a2314..ec5d26b 100644
+--- a/emulator/opengl/shared/OpenglCodecCommon/SocketStream.cpp
++++ b/emulator/opengl/shared/OpenglCodecCommon/SocketStream.cpp
+@@ -25,10 +25,86 @@
+ #include <netinet/in.h>
+ #include <netinet/tcp.h>
+ #include <sys/un.h>
++#include <sys/socket.h>
++#include <sys/time.h>
++#include <sys/system_properties.h>
+ #else
+ #include <ws2tcpip.h>
+ #endif
+ 
++
++/*
++ * POPLAR: "the renderer stopped answering" is a per-thread fact, matching the
++ * per-thread HostConnection and its TLS slot. It is deliberately not a member of
++ * SocketStream and not a new virtual: alloc()/flush() are inline, so the
++ * prebuilt encoder libraries have them inlined with hard-coded member offsets
++ * and vtable slots. Adding either shifts them and breaks those libraries.
++ */
++
++// How long to wait for a reply. A legitimate reply is one renderer round-trip:
++// milliseconds, or a full-frame readback (~8 MB) at worst. Anything past this is
++// a wedged renderer, not a slow one. Overridable for experiments without a
++// rebuild:  setprop persist.glr.replytimeout <seconds>
++#define GLR_REPLY_TIMEOUT_DEFAULT 20
++
++static __thread bool t_streamDead = false;
++
++bool glrGuestStreamDead() { return t_streamDead; }
++
++void glrGuestStreamRevive()
++{
++    if (t_streamDead) {
++        t_streamDead = false;
++        // only on the transition: HostConnection::get() calls this on every GL call
++        ERR("glr-guest: reconnecting to the renderer\n");
++    }
++}
++
++static void glrMarkDead(const char *why)
++{
++    if (!t_streamDead) {
++        t_streamDead = true;
++        ERR("glr-guest: giving up on the renderer (%s)\n", why);
++    }
++}
++
++void glrGuestSetReplyTimeout(int sock)
++{
++    if (sock < 0) return;
++
++    int secs = GLR_REPLY_TIMEOUT_DEFAULT;
++    char v[PROP_VALUE_MAX];
++    if (__system_property_get("persist.glr.replytimeout", v) > 0) {
++        int n = atoi(v);
++        if (n > 0 && n < 3600) secs = n;
++    }
++
++    struct timeval tv;
++    tv.tv_sec = secs;
++    tv.tv_usec = 0;
++    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
++    // MAPLE: bound the write side too. If the renderer stops draining its
++    // socket, send() would otherwise park the caller forever.
++    setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
++}
++
++// MAPLE: the kernel default socket buffer is 208 KB (net.core.{r,w}mem_default)
++// while one UI frame's GL command stream is easily several hundred KB. With a
++// socket that small the guest blocks in send() in the middle of a frame until
++// the renderer consumed it, serializing guest work with host work (measured:
++// ~30 fps cap, every frame submitted on the heels of the previous readback).
++// Let a frame or two be in flight: raise both directions. The system caps are
++// raised to 16 MiB by glrenderd before it listens.
++#define GLR_SOCK_BUF (8u << 20)
++
++void glrSetSocketBuffers(int sock)
++{
++    if (sock < 0) return;
++    int sz = GLR_SOCK_BUF;
++    setsockopt(sock, SOL_SOCKET, SO_SNDBUF, &sz, sizeof(sz));
++    setsockopt(sock, SOL_SOCKET, SO_RCVBUF, &sz, sizeof(sz));
++}
++
+ SocketStream::SocketStream(size_t bufSize) :
+     IOStream(bufSize),
+     m_sock(-1),
+@@ -90,29 +166,39 @@ int SocketStream::commitBuffer(size_t size)
+ 
+ int SocketStream::writeFully(const void* buffer, size_t size)
+ {
+-    if (!valid()) return -1;
++    if (!valid()) {
++        // A dead stream must not report failure: IOStream::alloc() would then
++        // return NULL and the (prebuilt) encoder libraries memcpy into it.
++        // Dropping the command leaves GL degraded but the process alive.
++        return 0;
++    }
+ 
+     size_t res = size;
+-    int retval = 0;
+ 
+     while (res > 0) {
+-        ssize_t stat = ::send(m_sock, (const char *)buffer + (size - res), res, 0);
++        // MSG_NOSIGNAL so a closed glrenderd socket returns EPIPE instead of
++        // raising SIGPIPE (which was crashing surfaceflinger).
++        ssize_t stat = ::send(m_sock, (const char *)buffer + (size - res), res, MSG_NOSIGNAL);
+         if (stat < 0) {
+-            if (errno != EINTR) {
+-                retval =  stat;
+-                ERR("%s: failed: %s\n", __FUNCTION__, strerror(errno));
+-                break;
++            if (errno == EINTR) {
++                continue;
+             }
+-        } else {
+-            res -= stat;
++            ERR("%s: failed: %s\n", __FUNCTION__, strerror(errno));
++            glrMarkDead("send failed");
++            // MAPLE: close the socket so the next call reconnects instead of
++            // writing to a dead fd. The command is dropped on purpose:
++            // reporting failure here would NULL IOStream::alloc() and the
++            // caller would memcpy into it.
++            closeDead();
++            return 0;
+         }
++        res -= stat;
+     }
+-    return retval;
++    return 0;
+ }
+ 
+ const unsigned char *SocketStream::readFully(void *buf, size_t len)
+ {
+-    const unsigned char* ret = NULL;
+     if (!valid()) return NULL;
+     if (!buf) {
+       return NULL;  // do not allow NULL buf in that implementation
+@@ -124,7 +210,20 @@ const unsigned char *SocketStream::readFully(void *buf, size_t len)
+             res -= stat;
+             continue;
+         }
++        if (stat < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
++            // The renderer is not answering. Do NOT keep waiting: for
++            // surfaceflinger this runs on the compositor thread, and blocking
++            // here freezes the display for good.
++            glrMarkDead("reply timeout");
++            closeDead();
++            return NULL;
++        }
+         if (stat == 0 || errno != EINTR) { // client shutdown or error
++            // Includes EOF: the renderer died or init restarted it. Mark it
++            // dead AND close the fd so the next GL call reconnects
++            // (RenderdStream::reconnectIfDead) instead of reading a dead socket.
++            glrMarkDead(stat == 0 ? "renderer closed the socket" : "socket error");
++            closeDead();
+             return NULL;
+         }
+     }
+@@ -166,3 +265,40 @@ int SocketStream::recv(void *buf, size_t len)
+     }
+     return res;
+ }
++
++void SocketStream::closeDead()
++{
++    if (m_sock >= 0) {
++#ifdef _WIN32
++        closesocket(m_sock);
++#else
++        ::close(m_sock);
++#endif
++        m_sock = -1;
++    }
++}
++
++// MAPLE: host-side helpers used by RenderThread (SDK tree only). The guest
++// tree compiles the same file without them; these two functions are the only
++// difference between the two copies.
++int SocketStream::peerPid()
++{
++#ifdef SO_PEERCRED
++    if (m_sock >= 0) {
++        struct ucred cred;
++        socklen_t len = sizeof(cred);
++        if (getsockopt(m_sock, SOL_SOCKET, SO_PEERCRED, &cred, &len) == 0) {
++            return (int)cred.pid;
++        }
++    }
++#endif
++    return -1;
++}
++
++void SocketStream::shutdownStream()
++{
++    // Tear the socket down so a peer blocked in send() sees EPIPE.
++    if (m_sock >= 0) {
++        ::shutdown(m_sock, SHUT_RDWR);
++    }
++}
+diff --git a/emulator/opengl/shared/OpenglCodecCommon/SocketStream.h b/emulator/opengl/shared/OpenglCodecCommon/SocketStream.h
+index b0a481b..2ca91cd 100644
+--- a/emulator/opengl/shared/OpenglCodecCommon/SocketStream.h
++++ b/emulator/opengl/shared/OpenglCodecCommon/SocketStream.h
+@@ -17,8 +17,20 @@
+ #define __SOCKET_STREAM_H
+ 
+ #include <stdlib.h>
++#include <sys/types.h>
+ #include "IOStream.h"
+ 
++// POPLAR: a synchronous GL call (glGetError, glCreateProgram, a readback, ...)
++// waits for the renderer's reply. If glrenderd wedges, or dies without closing
++// the socket cleanly, that wait has to end: for surfaceflinger the waiter is the
++// compositor's main thread, and blocking it freezes the display permanently.
++// These let the stream give up, and let HostConnection::get() drop the dead
++// connection so the next call reconnects.
++void glrGuestSetReplyTimeout(int sock);
++bool glrGuestStreamDead();
++void glrGuestStreamRevive();
++void glrSetSocketBuffers(int sock);
++
+ class SocketStream : public IOStream {
+ public:
+     typedef enum { ERR_INVALID_SOCKET = -1000 } SocketStreamError;
+@@ -40,12 +52,22 @@ public:
+     virtual int recv(void *buf, size_t len);
+     virtual int writeFully(const void *buf, size_t len);
+ 
++    // MAPLE: renderer-side helpers used by RenderThread (SDK tree only).
++    // Appended after every pre-existing virtual, and only in this tree, so the
++    // guest encoder libraries' vtable slots cannot move.
++    virtual int peerPid();
++    virtual void shutdownStream();
++
+ protected:
+     int            m_sock;
+     size_t         m_bufsize;
+     unsigned char *m_buf;
+ 
+     SocketStream(int sock, size_t bufSize);
++
++    // MAPLE: close and invalidate the socket when it is declared dead, so a
++    // later read/write fails fast instead of retrying a dead fd.
++    void closeDead();
+ };
+ 
+ #endif /* __SOCKET_STREAM_H */

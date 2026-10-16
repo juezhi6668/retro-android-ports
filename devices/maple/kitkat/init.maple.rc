@@ -103,13 +103,15 @@ on post-fs-data
 
     # the kernel resolves this from the requester's root, glrenderd's chroot has the a540 firmware there
     write /sys/module/firmware_class/parameters/path /vendor/firmware
-    # glrenderd NOT started by default: its uncoordinated FBIOPAN flips
-    # race SurfaceFlinger's and wedge the mdss overlay start (EBUSY ->
-    # panel frozen on the xboot splash; seen 2026-10-15). Pure SF+libagl
-    # is proven on the panel (correct UI twice). Start it live only for
-    # experiments (`adb shell start glrenderd`); re-architect the split
-    # (single flipper) before returning it to boot.
-    #start glrenderd
+    # glrenderd owns the panel (single flipper): surfaceflinger in glrenderd mode posts
+    # via rcFBPost and never FBIOPANs itself, so only this daemon pans fb0. it must be up
+    # before surfaceflinger's first egl/gralloc probe (both latch hw-vs-software once per
+    # process, with a 30s wait), hence here in post-fs-data, not on boot. glrenderd doubles
+    # fb0's yres_virtual itself if the fb HAL hasn't yet, so the old flips=0 startup race
+    # and the EBUSY wedge from two racing flippers are both gone (charquirks single-flipper
+    # design; maple TEST 30). disable only for software-fallback experiments
+    # (`stop glrenderd` live needs a surfaceflinger restart to take effect).
+    start glrenderd
 
     # the clearpad driver doesn't finish probing (no touch events) until this, lineage does the same
     write /sys/devices/virtual/input/clearpad/post_probe_start 1

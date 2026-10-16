@@ -46,7 +46,13 @@ SocketStream* UnixStream::accept()
     do {
         clientSock = ::accept(m_sock, nullptr, nullptr);
     } while (clientSock < 0 && errno == EINTR);
-    return clientSock < 0 ? nullptr : new UnixStream(clientSock, m_bufsize);
+    if (clientSock < 0)
+        return nullptr;
+    // MAPLE: before any command traffic - the 208 KB kernel default is smaller
+    // than one UI frame's command stream (see glrSetSocketBuffers in
+    // SocketStream.cpp). Set on the accepting side so the guest can run ahead.
+    glrSetSocketBuffers(clientSock);
+    return new UnixStream(clientSock, m_bufsize);
 }
 
 int UnixStream::connect(const char*)

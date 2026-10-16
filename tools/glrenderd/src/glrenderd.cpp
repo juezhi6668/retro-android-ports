@@ -6,6 +6,7 @@
 // usage: glrenderd <width> <height> [-fb]
 //   -fb  copy posted frames onto /dev/graphics/fb0 and flip, otherwise just count them
 #include <fcntl.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -42,6 +43,47 @@ struct Panel {
 static unsigned long s_frames;
 extern long long s_readbackMs;
 static long long s_copyMs, s_flipMs, s_lastReport, s_flipMax;
+// frame-path diagnostics (TEST 34): who limits the presented rate?
+static unsigned long s_posts, s_drops;
+static long long s_lastPostMs, s_postGapSumMs, s_stageMs;
+
+// net.core.rmem_max is 208 KB by default, so any SO_RCVBUF/SO_SNDBUF larger
+// than that is silently clamped - and for an AF_UNIX stream the sender blocks
+// as soon as the receiver's queue is full. Every full-frame gralloc push
+// (8.3 MB) can then stall a guest mid-write against a busy renderer. Raise the
+// caps before accepting anything; the buffers are demand-allocated, so this
+// costs nothing until a frame is actually in flight.
+#define GLR_SOCK_MAX "16777216"
+static void raise_socket_limits(void)
+{
+    static const char* kPaths[] = {
+        "/proc/sys/net/core/rmem_max",
+        "/proc/sys/net/core/wmem_max",
+    };
+    for (unsigned i = 0; i < sizeof(kPaths)/sizeof(kPaths[0]); i++) {
+        int fd = open(kPaths[i], O_WRONLY);
+        if (fd < 0) {
+            fprintf(stderr, "glrenderd: open %s: %s\n", kPaths[i], strerror(errno));
+            continue;
+        }
+        if (write(fd, GLR_SOCK_MAX, strlen(GLR_SOCK_MAX)) < 0)
+            fprintf(stderr, "glrenderd: write %s: %s\n", kPaths[i], strerror(errno));
+        close(fd);
+    }
+    for (unsigned i = 0; i < sizeof(kPaths)/sizeof(kPaths[0]); i++) {
+        char buf[32] = {0};
+        int fd = open(kPaths[i], O_RDONLY);
+        if (fd >= 0) {
+            int n = read(fd, buf, sizeof(buf) - 1);
+            close(fd);
+            if (n > 0) {
+                while (n > 0 && (buf[n-1] == '\n' || buf[n-1] == '\0')) buf[--n] = 0;
+                fprintf(stderr, "glrenderd: %s = %s\n", kPaths[i], buf);
+            }
+        }
+    }
+    fflush(stderr);
+}
 
 static bool open_panel(Panel* p)
 {
@@ -54,6 +96,28 @@ static bool open_panel(Panel* p)
     if (ioctl(p->fd, FBIOGET_FSCREENINFO, &fix) || ioctl(p->fd, FBIOGET_VSCREENINFO, &p->var)) {
         perror("glrenderd: fb0 info");
         return false;
+    }
+    // glrenderd owns the panel: surfaceflinger in glrenderd mode posts via rcFBPost over
+    // the socket and never FBIOPANs itself, so this daemon is the single flipper. that only
+    // holds if flippers agree on double-buffering. the fb HAL would double yres_virtual when
+    // it opens fb0, but nobody opens the fb HAL in glrenderd mode, so do it here exactly like
+    // the fb HAL would. without this we sample flips=0, memcpy without ever panning, and the
+    // panel freezes on the xboot splash (maple TEST 28). do it immediately, not wait-then-do:
+    // the wait only delays binding the socket the egl loader is polling for.
+    if (p->var.yres_virtual < p->var.yres * 2) {
+        p->var.yres_virtual = p->var.yres * 2;
+        p->var.activate = FB_ACTIVATE_NOW;
+        if (ioctl(p->fd, FBIOPUT_VSCREENINFO, &p->var))
+            perror("glrenderd: double-buffer fb0");
+        else if (ioctl(p->fd, FBIOGET_VSCREENINFO, &p->var))
+            perror("glrenderd: fb0 re-read");
+        else {
+            fprintf(stderr, "glrenderd: doubled fb0 virtual to %ux%u\n",
+                    p->var.xres_virtual, p->var.yres_virtual);
+            // the mode change can resize smem, re-read fix before mmap below
+            if (ioctl(p->fd, FBIOGET_FSCREENINFO, &fix))
+                perror("glrenderd: fb0 fix re-read");
+        }
     }
     p->stride = fix.line_length;
     // readback is r,g,b,a in memory, mdss can come up bgra instead
@@ -84,6 +148,7 @@ struct Presenter {
     int width, height;
     int ready;     // newest finished slot, -1 if nothing new
     int showing;   // slot the presenter is reading, -1 if idle
+    int writing;   // slot the readback is filling, -1 if none (A6)
     uint32_t* row; // one upscaled row in cached memory, fb0 is never read back
     uint32_t* swapped; // one source row with red and blue swapped
 };
@@ -126,10 +191,15 @@ static void present(Presenter* pr, const uint8_t* pixels)
     long long t1 = GetCurrentTimeMS();
     s_copyMs += t1 - t0;
     if (p->flips) {
-        // a plain pan, FBIOPUT_VSCREENINFO can take drm's set_par path and redo the whole mode
+        // flip the same way the stock gralloc's fb_post does (FBIOPUT_VSCREENINFO with a new
+        // yoffset). on maple's mdss_mdp_overlay the FBIOPAN_DISPLAY path logs "unable to
+        // allocate base pipe" and returns success WITHOUT moving the offset, so the panel
+        // stays frozen while fb0 holds correct frames. FBIOPUT goes through set_par, which
+        // is what actually re-arms the overlay here. (the ported comment about set_par
+        // "redoing the whole mode" was from pdx203's drm path, not this fbdev one.)
         p->var.yoffset = p->back * p->var.yres;
         p->var.activate = FB_ACTIVATE_VBL;
-        if (ioctl(p->fd, FBIOPAN_DISPLAY, &p->var) < 0)
+        if (ioctl(p->fd, FBIOPUT_VSCREENINFO, &p->var) < 0)
             perror("glrenderd: flip");
         p->back ^= 1;
     }
@@ -140,10 +210,16 @@ static void present(Presenter* pr, const uint8_t* pixels)
 
     if (++s_frames % 60 == 0) {
         long long now = GetCurrentTimeMS();
-        fprintf(stderr, "glrenderd: %.1f fps shown, per frame readback %.1fms copy %.1fms flip %.1fms (max %lldms)\n",
-                60000.0 / (now - s_lastReport), s_readbackMs / 60.0, s_copyMs / 60.0, s_flipMs / 60.0, s_flipMax);
+        fprintf(stderr, "glrenderd: %.1f fps shown, per frame readback %.1fms copy %.1fms flip %.1fms"
+                        " (max %lldms) posts=%lu drops=%lu postgap %.1fms stage %.1fms\n",
+                60000.0 / (now - s_lastReport), s_readbackMs / 60.0, s_copyMs / 60.0, s_flipMs / 60.0, s_flipMax,
+                s_posts, s_drops,
+                s_posts ? (double)s_postGapSumMs / s_posts : 0.0,
+                s_posts ? (double)s_stageMs / s_posts : 0.0);
         s_lastReport = now;
         s_readbackMs = s_copyMs = s_flipMs = s_flipMax = 0;
+        s_posts = s_drops = 0;
+        s_postGapSumMs = s_stageMs = 0;
     }
 }
 
@@ -164,6 +240,26 @@ static void* presenter_main(void* arg)
     return nullptr;
 }
 
+// MAPLE (poplar A6): called on the posting thread with a GL context current,
+// right before the readback. Choosing the destination here is what removes the
+// full-frame copy that used to sit between the readback and the presenter.
+static unsigned char* present_acquire(void* ctx, int* w, int* h)
+{
+    Presenter* pr = (Presenter*)ctx;
+    if (!pr)
+        return nullptr;
+    pthread_mutex_lock(&pr->lock);
+    // any slot that isn't on screen and isn't the newest pending frame is free
+    int slot = 0;
+    while (slot == pr->showing || slot == pr->ready)
+        slot++;
+    pr->writing = slot;
+    *w = pr->width;
+    *h = pr->height;
+    pthread_mutex_unlock(&pr->lock);
+    return pr->slots[slot];
+}
+
 static void on_post(void* ctx, int width, int height, int, int, int, unsigned char* pixels)
 {
     Presenter* pr = (Presenter*)ctx;
@@ -172,17 +268,35 @@ static void on_post(void* ctx, int width, int height, int, int, int, unsigned ch
             fprintf(stderr, "glrenderd: frame %lu %dx%d\n", s_frames, width, height);
         return;
     }
+    long long t0 = GetCurrentTimeMS();
     pthread_mutex_lock(&pr->lock);
-    // any slot that isn't on screen and isn't the newest pending frame is free
-    int slot = 0;
-    while (slot == pr->showing || slot == pr->ready)
-        slot++;
-    pthread_mutex_unlock(&pr->lock);
-    memcpy(pr->slots[slot], pixels, width * height * 4);
-    pthread_mutex_lock(&pr->lock);
-    pr->ready = slot;
+    if (pr->writing >= 0) {
+        // MAPLE (poplar A6): the readback already landed in the slot that
+        // present_acquire picked - nothing to copy, just publish it
+        if (pr->ready >= 0)
+            s_drops++;   // previous frame never made it to the panel (superseded)
+        pr->ready = pr->writing;
+        pr->writing = -1;
+    } else {
+        // fallback (no readback hook): copy the FrameBuffer's buffer to a slot
+        int slot = 0;
+        while (slot == pr->showing || slot == pr->ready)
+            slot++;
+        if (pr->ready >= 0)
+            s_drops++;   // previous frame never made it to the panel (superseded)
+        pthread_mutex_unlock(&pr->lock);
+        memcpy(pr->slots[slot], pixels, width * height * 4);
+        s_stageMs += GetCurrentTimeMS() - t0;
+        pthread_mutex_lock(&pr->lock);
+        pr->ready = slot;
+    }
     pthread_cond_signal(&pr->wake);
     pthread_mutex_unlock(&pr->lock);
+    long long now = GetCurrentTimeMS();
+    if (s_lastPostMs)
+        s_postGapSumMs += now - s_lastPostMs;
+    s_lastPostMs = now;
+    s_posts++;
 }
 
 static bool start_presenter(Presenter* pr, Panel* panel, int width, int height)
@@ -192,6 +306,7 @@ static bool start_presenter(Presenter* pr, Panel* panel, int width, int height)
     pr->height = height;
     pr->ready = -1;
     pr->showing = -1;
+    pr->writing = -1;
     pthread_mutex_init(&pr->lock, nullptr);
     pthread_cond_init(&pr->wake, nullptr);
     for (int i = 0; i < 3; i++)
@@ -231,12 +346,20 @@ static void on_crash(int sig, siginfo_t* si, void*)
 
 int main(int argc, char** argv)
 {
+    // first line: lets a cold-boot kmsg log show exec time vs "listening" time, so the
+    // surfaceflinger probe window (Loader.cpp) can be sized against the real startup latency
+    fprintf(stderr, "glrenderd: starting (pid %d)\n", getpid());
+
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
     sa.sa_sigaction = on_crash;
     sa.sa_flags = SA_SIGINFO;
     sigaction(SIGSEGV, &sa, nullptr);
     sigaction(SIGBUS, &sa, nullptr);
+    // a guest that dies mid-reply must never take the daemon down: the guest
+    // side already sends with MSG_NOSIGNAL, this is the belt-and-braces for
+    // every other write path
+    signal(SIGPIPE, SIG_IGN);
 
     if (argc < 3) {
         fprintf(stderr, "usage: %s <width> <height> [-fb]\n", argv[0]);
@@ -257,6 +380,8 @@ int main(int argc, char** argv)
         return 1;
     }
 
+    raise_socket_limits();
+
     if (!FrameBuffer::initialize(width, height)) {
         fprintf(stderr, "glrenderd: FrameBuffer::initialize failed\n");
         return 1;
@@ -266,6 +391,8 @@ int main(int argc, char** argv)
     if (to_fb && (!open_panel(&panel) || !start_presenter(&s_pres, &panel, width, height)))
         return 1;
     FrameBuffer::getFB()->setPostCallback(on_post, to_fb ? &s_pres : nullptr);
+    if (to_fb)
+        FrameBuffer::getFB()->setPostReadback(present_acquire, &s_pres);
 
     char addr[256];
     RenderServer* server = RenderServer::create(addr, sizeof(addr));

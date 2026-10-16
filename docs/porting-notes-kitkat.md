@@ -70,14 +70,47 @@ this doc is the KitKat delta. **Everything below the "Field lessons" header is b
   routes EGL to the emulation libs when glrenderd answers, libagl
   otherwise. Know the limits of the fallback: **libagl is ES1-only** —
   any ES2 client (live wallpaper, hwui apps) finds no matching config
-  and dies (`eglConfig not initialized`). Either bring a real ES2 path
-  or give ES2-only code a non-GL fallback (we did the latter for the
-  wallpaper: canvas path when EGL init throws).
+  and dies (`eglConfig not initialized`). Bring a real ES2 path (our
+  glrenderd/Adreno route does — ES 3.2) and keep a non-GL fallback for
+  when it's absent (the wallpaper canvas path when EGL init throws).
 - **Two flippers wedge mdss**: exactly one thing may
-  `FBIOPAN_DISPLAY`-flip fb0. SurfaceFlinger plus a second flipper
-  (glrenderd) desync yoffset and the overlay start fails with EBUSY,
-  freezing the panel on the splash. Keep a single flipper until the
-  split is re-architected.
+  `FBIOPAN_DISPLAY`-flip fb0. The trap is "mixed mode": start the second
+  flipper (glrenderd) *after* surfaceflinger has already run its EGL
+  emulation probe and SF is latched to the software renderer — the
+  decision is cached per process, so SF pans fb0 AND glrenderd pans →
+  desynced `yoffset`, `mdp ctl start failed` (EBUSY), panel frozen on the
+  splash. Fix is ordering, not arbitration: start glrenderd in
+  `post-fs-data`, before SF's first probe, so SF finds the socket and
+  takes the emulation path (posts via `rcFBPost`, never `FBIOPAN`s) and
+  glrenderd is the single flipper.
+- **Size the renderer-probe window to real startup latency**: the
+  egl + gralloc "is glrenderd there?" probes wait for the abstract
+  socket. glrenderd's cold-boot startup (adreno init + firmware load) is
+  slow; a 5s window missed it, SF fell back to software and never
+  reconsiders for the process lifetime. Wait generously (we use 300 ×
+  100 ms). Corollary: keep the daemon's own startup fast — a
+  "wait for the fb HAL to double-buffer, then do it ourselves" made bind
+  take 10s instead of 0.2s; nobody opens the fb HAL in glrenderd mode,
+  so just double `yres_virtual` immediately (`FBIOPUT_VSCREENINFO`) or
+  the daemon samples `flips=0` and memcpys without ever panning.
+- **Flip with the ioctl the working path uses, not the "obvious" one**: on
+  maple `FBIOPAN_DISPLAY` returns success but `mdss_mdp_overlay_pan_display`
+  logs `unable to allocate base pipe` and never moves `yoffset` — the panel
+  stays black while fb0 and screenshots are correct. The stock gralloc's
+  `fb_post` flips with `FBIOPUT_VSCREENINFO` + a new `yoffset`; mirroring that
+  made `/sys/class/graphics/fb0/pan` toggle. Trust the offset under activity
+  (and `dmesg`), not `mDisplayReady` or the `idle_power_collapse` sysfs string,
+  which lied. A ported comment claiming `FBIOPUT` "redoes the whole mode" was
+  from a drm target; on fbdev it is the correct, cheap flip.
+- **Disable mdss idle power collapse for a static UI**: `qcom,mdss-idle-power-collapse-enabled`
+  in the MDSS MDP DT node powers the MDP down when idle; a command-mode panel
+  then goes dim/black (no scanout) and the next flip is stalled, so a static
+  screen vanishes until touched. Strip the property from every appended DTB
+  (`scripts/patch-maple-dtb.py`) and repack the kernel. With a prebuilt
+  `Image.gz-dtb` the DTBs are appended uncompressed after the gzip stream
+  (`zlib`'s `unused_data` finds the boundary); decompile/recompile each with
+  `dtc`, or just drop the property line — a `dtc` round-trip that changes only
+  that property is safe.
 - **Gralloc stride must match the kernel's `line_length`**: mdss pads
   scanlines (1080 RGBA → 1088 px on maple) while generic gralloc aligns
   to 4 bytes — every row shears and the panel shows a parallelogram.
@@ -141,6 +174,103 @@ this doc is the KitKat delta. **Everything below the "Field lessons" header is b
 - **mkbootimg needed NO backport** for base-0 + `Image.gz-dtb` (verified
   geometry: base 0+0x8000, pagesize 4096). The predicted patch wasn't
   needed — verify fears before building them.
+- **An unbounded renderer reply is a permanent UI freeze** (maple TEST 32):
+  a synchronous GL call is a socket round trip; if the renderer stops
+  answering, the caller blocks forever — for systemui that is a frozen UI
+  (`recvfrom` inside `SocketStream::readFully`). Bound every wait
+  (`SO_RCVTIMEO`, prop-tunable), treat timeout/EOF/EPIPE as dead, reconnect
+  IN PLACE (never free the connection — use-after-free), send with
+  `MSG_NOSIGNAL`, and let a dead `writeFully` report success (a failing one
+  NULLs buffers the prebuilt encoders memcpy into). Renderer side: cap the
+  read buffer, bound one message per decode, drop the client.
+- **Forked apps must not share the GL socket** (same batch): the TLS
+  connection is inherited across zygote fork and several processes then
+  interleave writes on one stream (framing lost for good). Re-own the
+  connection on pid change in `HostConnection::get()` — as a file-static,
+  never a new member (inline `alloc()`/`flush()` carry hard-coded member
+  offsets into every already-built encoder lib).
+- **"stuck on splash" splits by USB** (maple TEST 32): adb alive + stale
+  panel = display-handoff wedge (system up); **no USB at all = pre-userspace
+  hang** (bootlog never wrote — check `/data` mtimes to confirm). The no-USB
+  form recovered via a TWRP round-trip (`adb reboot` from TWRP) — try that
+  before reflashing; a forced power-off loses ramoops, so pstore will not
+  explain the hang.
+- **Sibling-device fix sets are references, not recipes**: two msm8998
+  KitKat ports (maple/poplar) drew OPPOSITE conclusions on the fb0 flip
+  ioctl (`FBIOPAN_DISPLAY` vs `FBIOPUT_VSCREENINFO` — each verified on its
+  own device) and on who doubles `yres_virtual`. Keep on-device evidence
+  over cross-device advice; re-verify every quirk on the target.
+- **A borrowable fix set still needs reading, not copying** (maple TEST 33,
+  port execution): three things in the poplar bundle only worked because of
+  code it did not ship, or were outright incomplete:
+  (a) its reconnect design requires *closing* the socket when a stream is
+  marked dead — its shipped `SocketStream.cpp` marks dead and returns, so
+  `valid()` stays true and `reconnectIfDead()` can never fire; close the fd
+  (and invalidate it) or the "self-healing" stream never heals;
+  (b) the renderer reads a **per-connection handshake word** before it
+  decodes (`RenderServer::Main`: one `clientFlags` uint) — the first
+  connection gets it from `HostConnection::get()`, so an in-place
+  reconnect must replay it or the renderer eats the first GL command as
+  clientFlags (or trips `IOSTREAM_CLIENT_EXIT_SERVER` and exits);
+  (c) `RenderThread`'s drop path calls `peerPid()`/`shutdownStream()` that
+  are not in the bundle — append them to the HOST `IOStream` AFTER every
+  pre-existing virtual (guest vtable slots must not move), implement with
+  `SO_PEERCRED` + `SHUT_RDWR` (both present in KitKat bionic and the NDK).
+- **Bound the write side too**: a wedged renderer stops draining its
+  socket; `send()` then blocks forever, so `SO_RCVTIMEO` alone does not
+  save the compositor. Set `SO_SNDTIMEO`, `MSG_NOSIGNAL` on every send,
+  and have the daemon `signal(SIGPIPE, SIG_IGN)` — a guest dying mid-reply
+  must not be able to kill the renderer (its silent SIGPIPE death is the
+  classic "randomly reverted to software GL" cause).
+- **Raising `rmem_max`/`wmem_max` is not "setting the socket buffers"**
+  (maple TEST 34): the per-socket default is `net.core.{r,w}mem_default`
+  (208 KB on this kernel) regardless of the max — existing and new sockets
+  keep it until someone actually `setsockopt(SO_SNDBUF/SO_RCVBUF)`. On an
+  AF_UNIX stream the sender's `SO_SNDBUF` is what in-flight data is
+  accounted against, so a guest pushing a frame's command stream (>200 KB)
+  blocks in `send()` mid-frame and guest+renderer advance in lockstep
+  (measured: nothing else saturated, GPU at min clock, CPU idle). Set
+  ~8 MiB on both ends — sender at connect/reconnect, acceptor right after
+  `accept()`; the buffers are demand-allocated so the limit costs nothing
+  when idle. Sibling-port writeups claiming "SocketStream asks for 8 MB"
+  can be aspirational: read the code, not the doc (the shipped poplar
+  SocketStream asked for nothing).
+- **`userActivityTimeout` on the keyguard window caps screen-off at 10 s**
+  (maple TEST 33): AOSP `KeyguardViewManager` sets
+  `AWAKE_INTERVAL_DEFAULT_MS` (10000 ms) on the keyguard window's
+  `LayoutParams`, and WMS hands that to `PowerManagerService` as
+  `mUserActivityTimeoutOverrideFromWindowManager` — the effective timeout
+  becomes `min(setting, 10000)`. On a port that has just gained a working
+  lights HAL (before it, the backlight never moved, so nobody noticed the
+  display state), the panel now visibly blanks ~10 s after the last touch.
+  That is stock behavior, not a hang: the power key wakes it. Check
+  `dumpsys power | grep mUserActivityTimeoutOverride` before chasing it.
+- **Sony msm8998 exposes TWO independent backlight nodes**: the mdss led
+  (`/sys/class/leds/lcd-backlight`, AOSP convention) and the PMIC WLED
+  (`/sys/class/leds/wled`, what TWRP drives). Writing one does NOT change
+  the other's value (probe on live device, both max 4095). A lights HAL
+  should write both with the same scaled value — whichever is wired to the
+  panel takes effect, the other is inert. Verify brightness with
+  `settings put system screen_brightness N` + reading both nodes while the
+  screen is ON (`mScreenOn=true`; a sleeping screen reads 0 by design).
+- **Renderer rebuilds are safe when the protocol files are untouched**:
+  the "never rebuild glrenderd alone" rule is about `*_enc`/`*_dec` codec
+  tables generated from the `.in` files — if those are unchanged, the
+  regenerated tables are identical and the deployed guest `*_enc.so`
+  matches (maple TEST 33 rebuilt glrenderd from the same tree; panel came
+  up correct). Keep the known-good binary as the backup either way.
+- **The post readback is the per-frame cost floor on a framebuffer-backed
+  renderer** (maple TEST 35): with the guest composing on the host GPU and
+  the panel fed from fb0, every presented frame pays a synchronous
+  `glReadPixels` (~9–10 ms at 1080p) plus a copy into the presenter.
+  Bounce the readback straight into the presenter's staging slot (poplar's
+  A6: `FrameBuffer::setPostReadback` + a slot picker + an fb0-facing
+  presenter) and the extra full-frame copy disappears — ~1–2 ms/frame, no
+  added latency. Hiding the readback behind a PBO mapped a frame later
+  measured **slower** on this Adreno driver (13 vs 31–35 fps — the map
+  costs more than the sync readback it hides), so measure before assuming.
+  And keep the readback OUT of the panel page itself (fb0 page races /
+  vblank coupling — poplar tried it and reverted).
 
 ## Container gotchas (verified)
 
@@ -207,3 +337,16 @@ this doc is the KitKat delta. **Everything below the "Field lessons" header is b
 
 - (Empty — log Trusty-apt/JDK6/debootstrap issues here as they are hit,
   the way `docs/porting-notes.md` logs Hardy ones.)
+- **Measuring the panel pipeline on these ports (fb0 dumps, alpha, sleep)**
+  (maple TEST 34/35, each trap cost real time): the fb is RGBA and it is
+  normal for pixels to carry alpha 0 — an all-zero frame is *transparent
+  black* and an RGBA PNG of it renders as **white** in most viewers; decode
+  fb dumps with `format=rgb24` (ffmpeg) before concluding anything. A
+  sleeping screen keeps the last BLANK frame (zeros) in fb0. And a "frozen
+  white/black screen" with an idle-but-alive UI process is usually just the
+  screen asleep: these KitKat ports cap the screen-off timeout with the
+  keyguard window's `userActivityTimeout` (10 s), and **touch input does not
+  wake the screen** — a test harness must check `mScreenOn` and wake via a
+  power/menu key, or it will spend an hour "testing" a dark display. Also:
+  `screencap` can return a constant image on the glrenderd stack (use fb0
+  dumps), and `input keyevent 26` is a toggle, not "turn on".

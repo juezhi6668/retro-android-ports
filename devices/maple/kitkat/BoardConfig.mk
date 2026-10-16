@@ -10,6 +10,9 @@ LOCAL_PATH := $(call my-dir)
 TARGET_NO_BOOTLOADER := true
 TARGET_NO_RADIOIMAGE := true
 TARGET_PROVIDES_INIT_RC := true
+# lights.maple (vendor/sony/maple/lights) is the lights HAL; stop the build
+# from adding the generic default
+TARGET_PROVIDES_LIBLIGHT := true
 
 # maple uses GPT/ext4, NOT BML/stl. Fastboot-flashable boot.img (64 MB).
 # Stock/Reference geometry (yoshino-common):

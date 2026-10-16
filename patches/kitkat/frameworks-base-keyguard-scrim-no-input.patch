@@ -1,0 +1,33 @@
+diff --git a/policy/src/com/android/internal/policy/impl/keyguard/KeyguardServiceDelegate.java b/policy/src/com/android/internal/policy/impl/keyguard/KeyguardServiceDelegate.java
+index 13574624..25bf09e0 100644
+--- a/policy/src/com/android/internal/policy/impl/keyguard/KeyguardServiceDelegate.java
++++ b/policy/src/com/android/internal/policy/impl/keyguard/KeyguardServiceDelegate.java
+@@ -277,6 +277,12 @@ public class KeyguardServiceDelegate {
+                 | WindowManager.LayoutParams.FLAG_LAYOUT_INSET_DECOR
+                 | WindowManager.LayoutParams.FLAG_FORCE_NOT_FULLSCREEN
+                 | WindowManager.LayoutParams.FLAG_SHOW_WALLPAPER
++                // MAPLE (poplar fix): the crash scrim must never take input.
++                // When keyguard dies ("Removing keyguard window (Did it
++                // crash?)") it used to be shown and ate every touch, leaving
++                // the device looking hung.
++                | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
++                | WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                 ;
+ 
+         final int stretch = ViewGroup.LayoutParams.MATCH_PARENT;
+@@ -300,12 +306,9 @@ public class KeyguardServiceDelegate {
+     }
+ 
+     public void showScrim() {
+-        mScrim.post(new Runnable() {
+-            @Override
+-            public void run() {
+-                mScrim.setVisibility(View.VISIBLE);
+-            }
+-        });
++        // MAPLE (poplar fix): never show the crash scrim. A zombie scrim eats
++        // all input (see createScrim) - the last frame stays on screen while
++        // nothing responds. Better to leave the (usable) UI visible.
+     }
+ 
+     public void hideScrim() {

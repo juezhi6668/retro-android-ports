@@ -28,11 +28,13 @@ index 02914a0..4d69909 100644
 - *          through the "emulation" config.
 - */
 +// glrenderd (adreno in a lineage chroot) or nothing. the chroot only ships when it was staged,
-+// and surfaceflinger can beat glrenderd to its socket, so wait a little before giving up.
++// and surfaceflinger beats glrenderd to its socket on a cold boot (adreno init + firmware load
++// take ~10s), so wait generously before giving up. once surfaceflinger picks the software
++// renderer here it never reconsiders for the process lifetime, so this must not race.
 +// gralloc.maple's RenderdStream::available() makes the same call so the two never disagree
 +static const char kRenderdSocket[] = "glrenderd";
 +static const char kRenderdBinary[] = "/system/glr/root/glrenderd";
-+static const int kRenderdWaitTries = 50;
++static const int kRenderdWaitTries = 300;
 +static const useconds_t kRenderdWaitStepUs = 100000;
 +
 +static int s_renderdStatus;
