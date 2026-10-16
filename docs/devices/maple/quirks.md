@@ -949,6 +949,22 @@ Next actions (checkboxes for the log):
         capturing the panic needs pstore across the loop (not done).
         Cmdline flag reverted in-tree. Remaining wifi paths: cnss-daemon
         in a 64-bit Lineage chroot (real QMI handshake), or modem boot.
+      - TEST 37b (SKIP_QMI + BDF retest, 2026-10-16): the first SKIP_QMI
+        run may have crashed only on missing board data, so the FULL
+        test37 pair went in — `system-test37.raw.img` (5 GB,
+        md5 `4b8539ac…`, verified on-partition after dd; contains the
+        FW_DIR wiring: adsp.* + cpe_9335.* + bdwlan.* + wlan_mac.bin +
+        tested HAL) plus the same quirks boot.img. Result: SAME
+        bootloop (no adb after 110 s, twice). SKIP_QMI is dead without
+        QMI setup regardless of BDF — reverted, not retried. Restore
+        PENDING (owner away until tomorrow): TWRP → dd
+        `/data/media/boot-test36.img` (`c31321cb…`) to
+        `/dev/block/bootdevice/by-name/boot`, reboot. The test37 system
+        partition stays (good: FW wiring + HAL persist there).
+        Lesson learned the loud way: overwriting the RUNNING system
+        partition breaks the live libc (`CANNOT LINK EXECUTABLE ...
+        empty/missing DT_HASH`) — push, verify, then reboot
+        IMMEDIATELY without running anything else.
       - Audio DSP stall (TEST 36 follow-up): with the tasha card up and
         all 24 speaker controls verified SET via a static `tone_test`
         build (`tools/tone_test.c`, NDK r21e armv7a, static tinyalsa),
@@ -958,3 +974,21 @@ Next actions (checkboxes for the log):
         adsprpcd on this port; Lineage ships both plus rmt_storage and
         tftp_server). No new tombstones from the probe (the one new
         tombstone is a toolbox `ls|grep` SIGPIPE, known noise).
+      - QRTR verdict (2026-10-16, definitive): `/proc/kallsyms` holds
+        ZERO `qrtr` symbols (positive controls pass: binder 409,
+        msm_ipc_router 58, qmi_handle 12), `/proc/net` has no qrtr, and
+        the config has only legacy `CONFIG_IPC_ROUTER` + kernel-internal
+        QMI. Consequence: NO modern QMI userspace (pd-mapper,
+        cnss-daemon, rmt_storage, tftp_server — all 64-bit QRTR clients
+        in Lineage vendor) can run on this kernel, chroot or not. The
+        64-bit chroot is additionally blocked: no `linker64` anywhere
+        (APEX payloads ship separately; `sysmnt/apex` is empty).
+        What DOES work over legacy transports: kernel QMI
+        (sysmon-qmi reached ADSP SSCTL live), SMD FastRPC
+        (`/dev/adsprpc-smd` present — adsprpcd's channel), and PIL.
+        So the audio-PD path, if any, must go through adsprpcd-over-SMD
+        or in-HAL ACDB loading (`/dev/msm_audio_cal` exists;
+        `maple-fw/acdbdata` 7.9 MB staged on the server), never through
+        QRTR daemons. Same verdict kills the cnss-daemon chroot idea —
+        wifi's remaining paths are modem boot or a kernel QRTR
+        backport (both own workstreams).

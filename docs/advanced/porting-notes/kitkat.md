@@ -305,6 +305,20 @@ is the method reference — this doc is the KitKat delta. Back to the
   card still doesn't probe, the WSA881x amps (`qcom,wsa-devs`) are the
   next deferral suspect — check for any wsa/swr probe line before
   stripping them (speakers need them).
+- **Never dd the RUNNING system partition and keep using the shell**
+  (maple TEST 37b): writing the raw image underneath the mounted `/system`
+  corrupts the live libc (`CANNOT LINK EXECUTABLE: could not load library
+  "libc.so" ... empty/missing DT_HASH`) — every subsequent command dies.
+  Push the image, verify md5 on-partition, then reboot IMMEDIATELY without
+  running anything else. (Verified: `4b8539ac…` 5 GB, `dd` 38 s, md5
+  on-partition, `adb reboot` straight after.)
+- **Check QRTR in kallsyms before planning any QMI userspace** (maple
+  TEST 37): `grep -c qrtr /proc/kallsyms` with positive controls
+  (`binder`, `msm_ipc_router` must hit) — 0 means no modern QMI daemon
+  (cnss-daemon, pd-mapper, rmt_storage, tftp_server) can ever run,
+  chroot or not. Legacy IPC_ROUTER (`msm_ipc_router` thread,
+  `sysmon-qmi` reaching ADSP SSCTL) and SMD FastRPC
+  (`/dev/adsprpc-smd`) do work — constrain daemon designs to those.
 - **Read the running kernel, not the defconfig** (maple TEST 36):
   `/proc/config.gz` is ground truth (`4.4.302-whatawurst+` has
   `CONFIG_QCA_CLD_WLAN=y` built-in and the full tavil/WSA/QDSP6 set,

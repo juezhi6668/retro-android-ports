@@ -134,6 +134,15 @@ at the time, and what is queued for later phases. Current status:
   (ipa_smmu_wlan can't alloc its iommu domain live). Driver loads
   (v5.1.1.77V, /dev/wlan chr 229,0) but no wlan0/phy — WLFW/QMI handshake
   likely modem-gated. TEST 36 has the full inventory.
+- TEST 37 verdicts (maple-verified, constrain all future radio work):
+  SKIP_QMI panics at boot with AND without BDF staged (reverted); QRTR
+  is ABSENT from the kernel (0 kallsyms hits, legacy IPC_ROUTER only),
+  so NO QRTR userspace (cnss-daemon, pd-mapper, rmt_storage, tftp_server
+  — the 64-bit chroot idea is dead twice over: no `linker64` either).
+  Remaining wifi paths are modem boot or kernel QRTR backport. Audio's
+  remaining paths must likewise avoid QRTR: adsprpcd-over-SMD
+  (`/dev/adsprpc-smd` exists) or in-HAL ACDB via `/dev/msm_audio_cal`
+  (`maple-fw/acdbdata` staged).
 - Audio: tinyalsa `audio.primary.maple` written for the port in TEST 36
   (speaker = `speaker` + deep-buffer MM1/pcm0, mic = `handset-mic`/dmic1
   + MM1/pcm0, DEC7 104, no acdb, silent-safe pre-probe) with
