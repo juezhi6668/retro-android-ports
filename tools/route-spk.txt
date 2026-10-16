@@ -1,0 +1,28 @@
+# speaker route attempt for the tasha card (from mixer_paths_tasha.xml
+# "speaker" + "deep-buffer-playback"). Some of these are tavil-codec
+# controls that do NOT exist on tasha (tone_test reports SKIP) — the live
+# control dump decides what stays. verify-me.
+SLIMBUS_0_RX Audio Mixer MultiMedia1=1
+COMP7 Switch=1
+COMP8 Switch=1
+AIF4_VI Mixer SPKR_VI_1=1
+AIF4_VI Mixer SPKR_VI_2=1
+SLIM_4_TX Format=PACKED_16B
+SLIM RX0 MUX=AIF_MIX1_PB
+SLIM RX1 MUX=AIF_MIX1_PB
+SLIM_0_RX Channels=Two
+RX INT7_1 MIX1 INP0=RX0
+RX INT8_1 MIX1 INP0=RX1
+RX7 Digital Volume=82
+RX8 Digital Volume=82
+SpkrLeft COMP Switch=1
+SpkrRight COMP Switch=1
+SpkrLeft BOOST Switch=1
+SpkrRight BOOST Switch=1
+SpkrLeft VISENSE Switch=1
+SpkrRight VISENSE Switch=1
+SpkrLeft SWR DAC_Port Switch=1
+SpkrRight SWR DAC_Port Switch=1
+VI_FEED_TX Channels=Two
+SLIM0_RX_VI_FB_LCH_MUX=SLIM4_TX
+SLIM0_RX_VI_FB_RCH_MUX=SLIM4_TX

@@ -42,9 +42,50 @@ PRODUCT_COPY_FILES += \
     vendor/sony/maple/dump-boot-log.sh:system/bin/dump-boot-log.sh \
     vendor/sony/maple/glrenderd.sh:root/sbin/glrenderd.sh \
     vendor/sony/maple/gpio-keys.kl:system/usr/keylayout/gpio-keys.kl \
-    vendor/sony/maple/clearpad.idc:system/usr/idc/clearpad.idc
-# TODO proprietary wifi/firmware (BCM43xx + qcwcn) once extracted:
-#   vendor/sony/maple/proprietary/...:/system/...
+    vendor/sony/maple/clearpad.idc:system/usr/idc/clearpad.idc \
+    vendor/sony/maple/wifi/wpa_supplicant_overlay.conf:system/etc/wifi/wpa_supplicant_overlay.conf \
+    vendor/sony/maple/wifi/p2p_supplicant_overlay.conf:system/etc/wifi/p2p_supplicant_overlay.conf \
+    vendor/sony/maple/wifi/WCNSS_qcom_cfg.ini:system/vendor/firmware/wlan/qca_cld/WCNSS_qcom_cfg.ini \
+    vendor/sony/maple/audio/audio_policy.conf:system/etc/audio_policy.conf \
+    vendor/sony/maple/audio/mixer_paths_tasha.xml:system/etc/mixer_paths_tasha.xml \
+    frameworks/native/data/etc/android.hardware.wifi.xml:system/etc/permissions/android.hardware.wifi.xml
+# adsp + wlan calibration/BDF firmware blobs (modem `image/adsp.*`,
+# `image/bdwlan.*`, persist `wlan/wlan_mac.bin` — inventoried live
+# 2026-10-16) stay OUT of git (same policy as the kernel blob and the
+# glrenderd chroot: Sony/Qualcomm binaries, plus board-specific
+# calibration). Staged on the build server at
+# vendor/sony/maple-fw/{adsp,wlan,bt}/ (outside the sync-device-tree
+# rsync path, like vendor/sony/maple-glr); the FW_DIR block below copies
+# them into the image (CHARQUIRKS: firmware resolves against the
+# requester root with firmware_class.path=/vendor/firmware; a miss
+# stalls ~60 s per file in ueventd's user helper — that delay is the
+# tell). WCNSS_qcom_cfg.ini above ships from the tree.
+
+# audio.primary.maple (tinyalsa HAL) + sound recorder jni (CHARQUIRKS:
+# "sound recorder needs libsrec_jni in PRODUCT_PACKAGES or it crashes").
+# media_codecs.xml ships with the stock build (software codecs) — kept.
+PRODUCT_PACKAGES += \
+    audio.primary.maple \
+    libsrec_jni
+
+# Firmware blobs live out-of-git on the build server at
+# vendor/sony/maple-fw/{adsp,wlan,bt}/ (pulled from the modem/bluetooth
+# partitions + persist; mirrors the kernel-blob and maple-glr precedent so
+# sync-device-tree.sh --delete leaves them alone). Copy them into the
+# image where the kernel's firmware loader looks (firmware_class.path is
+# /vendor/firmware; /vendor -> /system/vendor):
+#  - adsp.* + cpe_9335.* (tavil/tasha audio DSP + codec engine)
+#  - bdwlan.* (WLAN board-data/calibration; driver picks by board id) +
+#    wlan_mac.bin (Sony's MAC from persist; without it the MAC falls back
+#    to otp/soc serial per CHARQUIRKS)
+#  - BT tlv/bin stay out for now (bluez bringup is a later change).
+FW_DIR := vendor/sony/maple-fw
+ifneq ($(wildcard $(FW_DIR)/adsp/adsp.mdt),)
+PRODUCT_COPY_FILES += \
+    $(foreach f,$(shell cd $(FW_DIR)/adsp && ls adsp.* cpe_9335.* 2>/dev/null),$(FW_DIR)/adsp/$(f):system/vendor/firmware/$(f)) \
+    $(foreach f,$(shell cd $(FW_DIR)/wlan && ls bdwlan* 2>/dev/null),$(FW_DIR)/wlan/$(f):system/etc/wifi/$(f)) \
+    $(FW_DIR)/wlan/wlan_mac.bin:system/vendor/firmware/wlan/qca_cld/wlan_mac.bin
+endif
 
 # glrenderd's guest side. gralloc.maple and the egl loader fall back to gralloc.default and
 # libagl whenever glrenderd isn't there

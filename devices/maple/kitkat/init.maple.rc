@@ -70,6 +70,17 @@ on init
 
     mkdir /data/misc 01771 system misc
     mkdir /data/misc/wifi 0770 wifi wifi
+    # KitKat wifi.c (hardware/libhardware_legacy/wifi/wifi.c) expects these
+    # but never creates them: the supplicant's ctrl socket dir (service
+    # wpa_supplicant runs with -O/data/misc/wifi/sockets) and dhcp's dir.
+    # Without them the supplicant cannot bind its ctrl socket and dhcpcd
+    # has nowhere to write leases (CHARQUIRKS wifi: "/data/misc/wifi,
+    # /data/misc/wifi/sockets, /data/misc/dhcp have to be made in
+    # post-fs-data, 4.2's init.rc doesn't" — same on KitKat; verified
+    # missing live 2026-10-16: only softap.conf existed under
+    # /data/misc/wifi). hammerhead's init.grouper.rc makes the same set.
+    mkdir /data/misc/wifi/sockets 0770 wifi wifi
+    mkdir /data/misc/dhcp 0770 dhcp dhcp
     mkdir /data/misc/log 0775 system log
     mkdir /data/local/tmp 0771 shell shell
     mkdir /data/dalvik-cache 0771 system system
@@ -79,7 +90,7 @@ on init
 
     # TODO: modem/firmware mounts (vfat /firmware, /bt_firmware) once the
     # corresponding daemons exist. NOT mounted until needed — see
-    # fstab.maple + docs/devices/maple.md blocker 5.
+    # fstab.maple + docs/devices/maple/quirks.md blocker 5.
     # TODO: 32-bit-userspace cgroup/lowmemorykiller tuning for 4 GB RAM
     # (cooper's 6-slot adj/minfree values do NOT carry over; re-derive from
     # KitKat ActivityManager defaults + measured pressure).
@@ -103,6 +114,13 @@ on post-fs-data
 
     # the kernel resolves this from the requester's root, glrenderd's chroot has the a540 firmware there
     write /sys/module/firmware_class/parameters/path /vendor/firmware
+    # Boot the adsp (TEST 36: `echo 1 > /sys/kernel/boot_adsp/boot` with
+    # adsp.* staged is what unblocked the whole audio stack live —
+    # tavil/tasha slim probes, WSA amps, Q6 DAIs, APR, and the tasha card
+    # all registered within a second). adsp.* + cpe_9335.* ship in the
+    # image via the FW_DIR block in full_maple.mk (out-of-git blobs).
+    # Without this write the card never probes ("No soundcards found").
+    write /sys/kernel/boot_adsp/boot 1
     # glrenderd owns the panel (single flipper): surfaceflinger in glrenderd mode posts
     # via rcFBPost and never FBIOPANs itself, so only this daemon pans fb0. it must be up
     # before surfaceflinger's first egl/gralloc probe (both latch hw-vs-software once per
@@ -155,3 +173,66 @@ service fuse_sdcard1 /system/bin/sdcard -u 1023 -g 1023 -w 1023 -d /mnt/media_rw
 service glrenderd /system/bin/sh /sbin/glrenderd.sh
     class core
     disabled
+
+# Wifi (Qualcomm WCN3990/cherokee, qca_cld3 built into the 4.4 kernel:
+# /sys/module/wlan exists, /dev/wlan chr 229,0, driver v5.1.1.77V live
+# 2026-10-16). KitKat wifi.c treats the driver as always loaded (no
+# WIFI_DRIVER_MODULE_*), so no insmod service is needed — but the
+# supplicant + dhcpcd SERVICES were never defined, so `ctl.start
+# wpa_supplicant` from wifi.c was a silent no-op and wifi could never
+# start. hammerhead pattern (overlay -I flags included; the overlay stubs
+# ship via full_maple.mk).
+# CHARQUIRKS divergence: pdx203 runs plain wpa_supplicant (no
+# android.hardware.wifi.direct.xml); maple defines both services like
+# hammerhead and lets the framework choose.
+service wpa_supplicant /system/bin/wpa_supplicant \
+    -iwlan0 -Dnl80211 -c/data/misc/wifi/wpa_supplicant.conf \
+    -I/system/etc/wifi/wpa_supplicant_overlay.conf \
+    -O/data/misc/wifi/sockets \
+    -e/data/misc/wifi/entropy.bin -g@android:wpa_wlan0
+    class main
+    socket wpa_wlan0 dgram 660 wifi wifi
+    disabled
+    oneshot
+
+service p2p_supplicant /system/bin/wpa_supplicant \
+    -iwlan0 -Dnl80211 -c/data/misc/wifi/wpa_supplicant.conf \
+    -I/system/etc/wifi/wpa_supplicant_overlay.conf \
+    -O/data/misc/wifi/sockets -N \
+    -ip2p0 -Dnl80211 -c/data/misc/wifi/p2p_supplicant.conf \
+    -I/system/etc/wifi/p2p_supplicant_overlay.conf \
+    -puse_p2p_group_interface=1 -e/data/misc/wifi/entropy.bin \
+    -g@android:wpa_wlan0
+    class main
+    socket wpa_wlan0 dgram 660 wifi wifi
+    disabled
+    oneshot
+
+service dhcpcd_wlan0 /system/bin/dhcpcd -aABDKL
+    class main
+    disabled
+    oneshot
+
+service dhcpcd_p2p /system/bin/dhcpcd -aABKL
+    class main
+    disabled
+    oneshot
+
+service iprenew_wlan0 /system/bin/dhcpcd -n
+    class main
+    disabled
+    oneshot
+
+service iprenew_p2p /system/bin/dhcpcd -n
+    class main
+    disabled
+    oneshot
+
+# qcom subsystem safety (CHARQUIRKS kernel: "every qcom subsystem defaults
+# to SYSTEM restart, so any dsp crash panics the phone. subsys.sh sets
+# adsp, slpi, wlan and cdsp to RELATED before anything boots them").
+# Live 2026-10-16 all 7 subsys (ipa_fws venus spss a540_zap adsp slpi
+# modem) read SYSTEM. Writes that miss (older kernels) fail silently.
+on post-fs-data
+    write /sys/bus/msm_subsys/devices/subsys4/restart_level RELATED
+    write /sys/bus/msm_subsys/devices/subsys5/restart_level RELATED

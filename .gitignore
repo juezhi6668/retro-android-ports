@@ -13,3 +13,7 @@ reference/twrp-bml9.img
 # Python
 __pycache__/
 *.pyc
+
+# Private per-instance agent notes (never committed)
+AGENTS.local.md
+reference/CHARQUIRKS.md

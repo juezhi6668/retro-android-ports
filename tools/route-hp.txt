@@ -1,0 +1,14 @@
+# headphone route for the tasha card (from mixer_paths_tasha.xml
+# "headphones" + "deep-buffer-playback headphones"). NAME=VALUE for
+# tone_test. verify-me: RX1/RX2 volumes + DEM mux names against the
+# tone_test control dump.
+SLIMBUS_6_RX Audio Mixer MultiMedia1=1
+SLIM RX0 MUX=AIF_MIX1_PB
+SLIM RX1 MUX=AIF_MIX1_PB
+SLIM_0_RX Channels=Two
+RX INT1_1 MIX1 INP0=RX0
+RX INT2_1 MIX1 INP0=RX1
+RX INT1 DEM MUX=CLSH_DSM_OUT
+RX INT2 DEM MUX=CLSH_DSM_OUT
+RX1 Digital Volume=76
+RX2 Digital Volume=76

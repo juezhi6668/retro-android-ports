@@ -1,17 +1,22 @@
 #!/usr/bin/env python3
-# Patch the maple (Sony Xperia XZ Premium) kernel blob to disable mdss idle
-# power collapse.
+# Patch the maple (Sony Xperia XZ Premium) kernel blob:
+#  1. disable mdss idle power collapse (`qcom,mdss-idle-power-collapse-enabled`
+#     in every appended DTB's MDSS MDP node — the pdx203-jellybean fix; with
+#     it set a static UI vanishes until touched, TEST 31), and
+#  2. drop the boolean `qcom,wcn-btfm` from the tavil/tasha sound nodes
+#     (CHARQUIRKS audio dt, maple TEST 36: with it the sound card waits
+#     forever on the btfm slimbus dai and never registers).
 #
 # The stock Image.gz-dtb has `qcom,mdss-idle-power-collapse-enabled` in the
 # MDSS MDP node of every appended DTB. With it set, mdss powers the MDP down
 # when the display goes idle; on maple the panel then goes black (the overlay
 # stops scanning fb0) and the next fbdev flip is stalled, so a static UI
 # disappears even though fb0 still holds correct frames. Removing the property
-# (the pdx203-jellybean fix) keeps the panel scanning the last frame.
+# keeps the panel scanning the last frame.
 #
 # This edits the kernel blob in place, which is a boot-time-only artifact and
-# is NOT in git (see docs/devices/maple.md). Run it on the dumped kernel before
-# a boot image is built:
+# is NOT in git (see docs/devices/maple/quirks.md). Run it on the dumped kernel
+# before a boot image is built:
 #
 #   scripts/patch-maple-dtb.py vendor/sony/maple/kernel
 #
@@ -27,6 +32,18 @@ import tempfile
 import zlib
 
 PROP = "qcom,mdss-idle-power-collapse-enabled"
+# Audio (maple TEST 36, CHARQUIRKS audio dt): the tavil/tasha sound nodes
+# carry the boolean `qcom,wcn-btfm`, which pulls the btfm slimbus codec
+# DAIs (btfmslim_slave) into the card. No btfm driver/firmware runs on
+# this port, so the card waits forever on that dai and never registers
+# ("No soundcards found", silent ASoC deferral live 2026-10-16) — the
+# pdx203-jellybean `qcom,wcn-bt = <0>` fix, translated to maple's
+# property name. BT SCO audio stays dead (slimbus into the adsp, nothing
+# drives it: CHARQUIRKS), same documented limit.
+PROPS = [
+    PROP,
+    "qcom,wcn-btfm",
+]
 FDT_MAGIC = b"\xd0\x0d\xfe\xed"
 
 
@@ -61,11 +78,14 @@ def patch_dtb(dtb, dtc):
                        check=True, stderr=subprocess.DEVNULL)
         with open(dts) as f:
             text = f.read()
-        if PROP + ";" not in text:
+        orig = text
+        for prop in PROPS:
+            kept = [ln for ln in text.splitlines() if ln.strip() != prop + ";"]
+            text = "\n".join(kept) + "\n"
+        if text == orig:
             return dtb
-        kept = [ln for ln in text.splitlines() if ln.strip() != PROP + ";"]
         with open(dts, "w") as f:
-            f.write("\n".join(kept) + "\n")
+            f.write(text)
         subprocess.run([dtc, "-I", "dts", "-O", "dtb", "-o", out, dts],
                        check=True, stderr=subprocess.DEVNULL)
         with open(out, "rb") as f:
@@ -96,8 +116,8 @@ def main():
               (i, "patched" if new != dtb else "unchanged", len(dtb), len(new)))
 
     if not changed:
-        print("nothing to do: %s already absent in all %d DTBs" %
-              (PROP, len(dtbs)))
+        print("nothing to do: all props %s already absent in all %d DTBs" %
+              (PROPS, len(dtbs)))
         return 0
 
     if not args.no_backup and not os.path.exists(args.kernel + ".orig"):
