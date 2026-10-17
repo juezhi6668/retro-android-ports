@@ -328,6 +328,13 @@ static ssize_t out_write(struct audio_stream_out *stream, const void *buffer,
         return bytes;
     }
     rc = pcm_write(out->pcm, buffer, frames);
+    if (rc != 0) {
+        /* ADSP restart (modem RELATED restart) can invalidate the PCM
+         * handle; drop it so the next write re-opens on the new card. */
+        pcm_close(out->pcm);
+        out->pcm = NULL;
+        out->standby = 1;
+    }
     pthread_mutex_unlock(&out->lock);
     if (rc != 0)
         return -EIO;
