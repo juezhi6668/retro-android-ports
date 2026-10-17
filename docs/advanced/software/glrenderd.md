@@ -47,7 +47,9 @@ the `*glrenderd*` entries in
 
 ## Building and staging
 
-Prerequisites: apply the four `*glrenderd*` patches to the AOSP tree, an
+Prerequisites: apply the four `*glrenderd*` patches plus the
+[`patches/kitkat/files/`](../../../patches/kitkat/README.md) overlay
+(RenderdStream.\*, whole files a diff cannot carry) to the AOSP tree, an
 NDK (r21e on our build server), plus a Lineage 20 maple build (zip or
 system/vendor images) for the chroot. Then:
 
@@ -63,6 +65,19 @@ present (the directory lives outside `vendor/sony/maple` because
 `sync-device-tree.sh` rsyncs with `--delete`), so rebuild the images after
 staging. The init service is `/system/bin/sh /sbin/glrenderd.sh` →
 `hwchroot /system/glr/root /glrenderd 1080 1920 -fb 2/dev/kmsg`.
+
+**Staging refresh rule**: an image build ships whatever the staging dir
+holds, so a daemon that was only live-pushed to a device is silently
+reverted the next time an image is built from an un-refreshed staging
+tree. Refresh staging in the same change as the rebuild and verify:
+`md5sum vendor/sony/maple-glr/root/glrenderd tools/glrenderd/out/glrenderd`
+(same for `hwchroot`). Maple 2026-10-17 shipped pre-reliability-set daemon
+bits next to new guest libs that way — the cross-build mismatch crashed the
+daemon ~3x per 5 min of use (full writeup: TEST 41 in the
+[maple quirks](../../devices/maple/quirks.md)). "Which daemon is running"
+without md5s: the A1–A6 build prints `posts=… drops=… postgap … stage …`
+in its stats lines, the stale one did not. Sibling note: `hwchroot` is
+shared with poplar — a fix here reaches poplar at its next staging build.
 
 **Renderer rebuild rule**: `build.sh` regenerates the guest codec tables;
 a rebuilt daemon deployed against stale `*_enc.so` comes up dim/garbled.
@@ -95,6 +110,25 @@ The full symptom → root cause → fix writeups are in the
 - **Readback lands in a presenter slot** (poplar A6), never in the fb0
   page itself. Async/PBO readback measured *slower* on this Adreno
   (`persist.glr.asyncreadback`, ships off).
+- **A daemon restart strands a live surfaceflinger**: the fresh daemon has
+  no server-side state for SF's window objects — SF keeps flipping its
+  stale buffers with `posts=0` forever (its GL mode latches once per
+  process). `hwchroot` self-heals: a marker on `/dev`'s tmpfs
+  (`/dev/.glr/ran`) makes every hwchroot run after the first-of-boot fork
+  the host's `/system/bin/setprop ctl.restart surfaceflinger` before
+  exec'ing the daemon, so every daemon death costs one SF restart (~2–4 s
+  of UI stall), not a frozen frame path. Cold boots are exempt, and never
+  probe "is SF running?" as the restart signal — SF's process forks
+  milliseconds behind glrenderd's at boot (class_start core runs right
+  after post-fs-data's `start glrenderd`).
+- **The chroot is assembled on `/dev`'s tmpfs, not under `<root>`**: an
+  image built with `find . -type f` staging (see below) has no empty
+  `dev`/`proc`/`sys`/`data` dirs inside `<root>`, and mkdir'ing them at
+  runtime fails EROFS on the read-only system partition — every bind then
+  fails ENOENT, glrenderd restart-loops, and SF's probe lapses to the
+  software renderer. `hwchroot` builds mountpoints on a writable skeleton
+  (`/dev/.glr`) each run instead; log stamp `hwchroot: assembled
+  /dev/.glr from /system/glr/root`.
 
 ## Status and performance (maple, verified)
 
@@ -105,6 +139,10 @@ The full symptom → root cause → fix writeups are in the
   compose waits, not compute (GPU at min clock, CPU idle).
 - Reliability set (TEST 33–35): fork-safety re-own, bounded reply +
   in-place reconnect, 8 MiB buffers, desync-proof renderer, § above.
+- Reliability follow-up (TEST 41): fresh-image boot fixed (tmpfs chroot
+  skeleton), stale-daemon/guest-build mismatch crash fixed (binary
+  deployed + staging refreshed), daemon-restart self-heal; cold-boot and
+  stress matrix verified 2026-10-17.
 
 ## Porting it to another device
 

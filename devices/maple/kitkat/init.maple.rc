@@ -161,7 +161,8 @@ on post-fs-data
     # fb0's yres_virtual itself if the fb HAL hasn't yet, so the old flips=0 startup race
     # and the EBUSY wedge from two racing flippers are both gone (charquirks single-flipper
     # design; maple TEST 30). disable only for software-fallback experiments
-    # (`stop glrenderd` live needs a surfaceflinger restart to take effect).
+    # (`stop glrenderd` live needs a surfaceflinger restart to take effect; hwchroot
+    # now bounces SF itself on any 2nd+ daemon start of a boot — maple TEST 41).
     start glrenderd
 
     # the clearpad driver doesn't finish probing (no touch events) until this, lineage does the same

@@ -1033,3 +1033,83 @@ Next actions (checkboxes for the log):
   `init.maple.rc`). Also bake the audio HAL fix
   (`stop_threshold = INT_MAX` in `audio/audio_hw.c`) into the next
   system image.
+
+## Bringup log: GL reliability on fresh images (2026-10-17)
+
+- **TEST 41 (owner: "hardware accelerated GL only works sometimes" — full
+  speed all the time; 2026-10-17):** three stacked defects found and fixed,
+  verified with cold boots plus a crash/restart stress matrix.
+  - **Fresh images dropped the chroot's empty dirs, so SF latched
+    software.** Symptom: single-digit fps from boot,
+    `init.svc.glrenderd=restarting`; dmesg `hwchroot: bind /dev ->
+    /system/glr/root/dev: No such file or directory`; `/dev/block/sde46
+    /system ext4 ro`. Root cause: `full_maple.mk` stages the renderer
+    chroot with `find . -type f` + `PRODUCT_COPY_FILES`, which cannot
+    carry the empty dirs `stage.py` stages (`dev`, `proc`, `sys`,
+    `data/...`); hwchroot's runtime mkdir then fails EROFS on the
+    read-only partition, every bind gets ENOENT, glrenderd
+    restart-loops and surfaceflinger's one-shot hw-vs-software probe
+    (30 s wait, latched per process) falls to the software renderer.
+    Fix: `hwchroot` assembles the chroot from a writable tmpfs skeleton
+    at `/dev/.glr` (generic entry binds, /dev bound first, synthetic
+    dirs) instead of mkdir'ing inside `<root>` — log stamp `hwchroot:
+    assembled /dev/.glr from /system/glr/root`. Verified on cold boots
+    (final hwchroot md5 `24adff33…`): assembled at ~4.9 s, SF reports
+    `GLES: Qualcomm, Adreno (TM) 540, OpenGL ES 3.2`, boot animation
+    28–37 fps, steady `posts=60 drops=0`.
+  - **The image also shipped a stale daemon — guest and server halves from
+    different builds.** `/system/glr/root/glrenderd` was the pre-A1–A6
+    binary (md5 `c88c3883…`, 162320 B, stats lines without `posts=`)
+    while the guest libs in the same image were current (proof:
+    `/system/lib/libOpenglSystemCommon.so` carries `glr-guest:
+    reconnecting to the renderer`, `persist.glr.replytimeout`) — the
+    server staging dir was never refreshed after the reliability-set
+    work. The mismatch exposed ~3 daemon crashes in 5 min of use
+    (FORTIFY `pthread_mutex_lock called on a destroyed mutex
+    (0xf3ef332c)`; `signal 11 at 0x20` inside `glBindTexture+29`;
+    `signal 11 at 0x4` in `EsxContext::TexImage` via
+    `glTexSubImage2D`) around client drops and panel transitions. Fix:
+    rebuilt from current sources (`tools/glrenderd/build.sh`; md5
+    `bcb4ab7a…`, 170668 B), deployed, and the staging tree refreshed so
+    images ship the same pair. Which-daemon check: the new build logs
+    `posts=… drops=… postgap … stage …`. Verified: the identical stress
+    (settings launch + scroll, page/drawer swipes, screen off/on cycles,
+    daemon stop/start churn) → **0 crashes**, animated windows 12–35 fps
+    depending on stimulus.
+  - **A restarted daemon strands a live surfaceflinger:** the fresh
+    daemon has no server-side state for SF's window objects, so `posts=0`
+    under the new instance while SF keeps flipping its stale buffers
+    (guest in-place reconnect does not rebuild window objects).
+    Recovery is `setprop ctl.restart surfaceflinger` (`service_restart`,
+    `system/core/init/init.c:400`: running → stop+start, not running →
+    start, restarting → no-op) — verified: SF pid changes, re-probes to
+    Adreno, frames resume. This generalizes the "`stop glrenderd` live
+    needs a surfaceflinger restart" note in init.maple.rc to every daemon
+    death.
+  - **Self-heal in hwchroot (no watchdog service needed):** a marker file
+    on the /dev tmpfs (`/dev/.glr/ran`) records "the daemon ran this
+    boot"; on any 2nd+ hwchroot run since boot with the daemon binary
+    present, hwchroot forks the host's `/system/bin/setprop ctl.restart
+    surfaceflinger` itself, then execs the daemon. Cold boots are exempt
+    (the first run is init's own from post-fs-data). No rate limit ships:
+    init's own crash-restart backoff (`time_started + 5`,
+    `restart_service_if_needed`, init.c:418) already spaces crash-loop
+    cycles ≥5 s, and suppressing heals would strand the instance that
+    finally survives a loop. Verified live: `stop/start glrenderd` → heal
+    + SF re-probe + frames; `kill -ABRT` on the daemon → init restart →
+    heal (SF pid changed the moment the service came back) → frames;
+    cold boots → **no** heal line.
+    - **Trap caught while building it: never use "is SF running?" as the
+      restart signal.** At boot, post-fs-data's `start glrenderd` returns
+      as soon as hwchroot is forked and init immediately runs `on boot`'s
+      `class_start core` — SF's process appears milliseconds behind
+      glrenderd's (the first attempt bounced an SF that was ~10 ms old:
+      "daemon restart" at 4.87 s, replacement SF only up at 9.86 s =
+      exactly the 5 s backoff; that is how the race was found). The
+      run-count marker is the honest signal; SF's GL probe happens
+      seconds later, by which time glrenderd listens.
+  - Ops notes (each cost a boot cycle): replacing `/system/glr/hwchroot`
+    is a plain push (the running process image is `/glrenderd`); replacing
+    `/system/glr/root/glrenderd` hits `Text file busy` until
+    `stop glrenderd` — stop → cp → chmod 755 → `sync` → remount ro →
+    `start`. Verify deployed identity by md5, not timestamps.

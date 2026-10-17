@@ -99,6 +99,7 @@ Each release has its own end-to-end guide; the README stays short:
 - [x] KitKat 4.4.4 on `maple`: boots to the launcher with touch, display,
       USB adb (Oct 2026); hardware GL/GLES on the Adreno 540; panel
       presentation; XZ1/poplar reliability + GL perf sets (TESTs 30–35);
+      fresh-image GL boot + daemon crash/restart self-heal (TEST 41);
       lights HAL; wifi feature/supplicant plumbing (TEST 36).
 - [ ] Finish maple: WiFi interface (SERVREG_LOC now served in-tree by
       `pdserve` and the PDR chain registers its notifier; blocked on the

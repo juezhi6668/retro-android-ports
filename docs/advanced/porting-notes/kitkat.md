@@ -339,6 +339,48 @@ is the method reference — this doc is the KitKat delta. Back to the
   generic stub). Diagnose via `/data/tombstones` + `addr2line` against
   `out/.../symbols/...` (cooper 32-vs-40-byte lesson, same tools).
 
+- **`PRODUCT_COPY_FILES` cannot ship empty directories** (maple TEST 41,
+  2026-10-17): staging a tree with `find . -type f` (the `stage.py` idiom)
+  silently drops every empty dir (`dev`, `proc`, `sys`, `data/...`). Any
+  design that `mkdir`s mountpoints inside a read-only partition at runtime
+  (chroot + bind-mount layouts) then fails `EROFS`, its binds fail
+  `ENOENT`, the daemon restart-loops and a one-shot hw-vs-software GL probe
+  latches software for the life of the process (single-digit fps until SF
+  restarts). Fix: build mountpoints on a writable tmpfs at runtime —
+  `hwchroot` assembles glrenderd's chroot under `/dev/.glr` and binds the
+  real entries onto it; nothing inside `<root>` is ever written.
+- **Staged binaries silently revert to whatever the staging dir holds**
+  (maple TEST 41): a rebuilt daemon was live-pushed to the device but the
+  staging dir was never refreshed, so the next system image shipped the old
+  binary beside the new guest libs — a cross-build protocol mismatch that
+  crashed the daemon ~3x in 5 min (FORTIFY destroyed-mutex, SIGSEGV in
+  `glBindTexture`/`TexImage`). Refresh staging in the same change as the
+  rebuild, verify deployed identity by hash, and have the new build print a
+  marker (a stats/log field) so "which binary is running" is one
+  `dmesg | grep`.
+- **KitKat init service-restart facts** (maple TEST 41, straight from
+  `system/core/init/init.c`): a crashed service only restarts after
+  `time_started + 5` (`restart_service_if_needed`, ~line 418), so a
+  crash-loop has a ≥5 s cycle; `setprop ctl.restart <svc>`
+  (`service_restart`, ~line 400) means stop+start when running, plain start
+  when not, no-op while restarting. Restarts are invisible to property
+  triggers (4.4 init has no state notifications), so a component that must
+  react to another service's restart needs an in-band marker file.
+- **Init triggers do not wait for the services they start** (maple
+  TEST 41): `start glrenderd` in post-fs-data returns once the process is
+  forked, and init proceeds to the next trigger (`on boot` →
+  `class_start core`) immediately — surfaceflinger's process appeared
+  milliseconds behind glrenderd's at maple's boot (caught by a probe that
+  wrongly assumed "SF running" meant "the daemon restarted"). Never infer
+  service states from process presence during early triggers.
+- **Cross-era property writes exec the host's `setprop`** (maple TEST 41):
+  a helper built static with a modern NDK still runs on the old release,
+  but its property client expects the post-8.x `/dev/__properties__`
+  layout, not KitKat's single-file area — hwchroot `fork`+`exec`s the
+  host's `/system/bin/setprop` for `ctl.restart` instead (verified on
+  device). Same trick applies to any modern-side helper that must poke an
+  ancient release's init.
+
 ## Container gotchas (verified)
 
 - Trusty image needs `lib32stdc++6 lib32z1` (KitKat's 32-bit prebuilt

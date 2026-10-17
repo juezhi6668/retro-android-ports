@@ -43,7 +43,7 @@ live under [GitHub Releases](https://github.com/pukikiko/retro-android-ports/rel
 ## Documentation and links
 
 - [**Device quirks**](quirks.md) — hardware snapshot, flash layout, the
-  full TEST 1–37 bringup log, blockers and verified fixes.
+  full TEST 1–41 bringup log, blockers and verified fixes.
 - [KitKat 4.4.4 porting notes](../../advanced/porting-notes/kitkat.md) —
   generic playbook this port produced.
 - [Building KitKat for maple](../../advanced/build/kitkat.md).
