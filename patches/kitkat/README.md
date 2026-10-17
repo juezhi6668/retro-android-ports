@@ -18,7 +18,7 @@ cd aosp-kitkat/system/core && git apply ../../patches/kitkat/<name>.patch
 | `build-jdk-openjdk6.patch` | `build` | `core/main.mk`: accept OpenJDK 6 (Oracle JDK 6 uninstallable in 2026); version check below still enforces 1.6.x |
 | `bionic-binder-uapi-64bit.patch` | `bionic` | `libc/kernel/common/linux/binder.h` as the 64-bit binder abi (protocol 8), the only one the 4.4 kernel speaks |
 | `frameworks-native-binder-64bit.patch` | `frameworks/native` | libbinder and servicemanager on that abi, every pointer and offset the kernel sees is 64 bits. replaces `binder-uapi-64bit.patch`, reset both projects before applying |
-| `device-generic-goldfish-glrenderd.patch` | `device/generic/goldfish` | the emulator gl libs dial glrenderd's abstract socket instead of a qemu pipe, gralloc builds as `gralloc.maple` and falls back to `gralloc.default` without glrenderd, gles1 encoder fix for image specification while `TEXTURE_EXTERNAL_OES` is enabled. Reliability set: fork-safety pid re-own in `HostConnection::get()`, bounded replies + in-place reconnect with handshake replay (`SocketStream`/`RenderdStream`), 8 MiB per-connection socket buffers (`glrSetSocketBuffers`), gralloc `lock()` skips the `rcColorBufferCacheFlush` round-trip |
+| `device-generic-goldfish-glrenderd.patch` | `device/generic/goldfish` | the emulator gl libs dial glrenderd's abstract socket instead of a qemu pipe, gralloc builds as `gralloc.maple` and falls back to `gralloc.default` without glrenderd, gles1 encoder fix for image specification while `TEXTURE_EXTERNAL_OES` is enabled. Reliability set: fork-safety pid re-own in `HostConnection::get()`, bounded replies + in-place reconnect with handshake replay (`SocketStream`/`RenderdStream` — the RenderdStream files themselves ship via `files/`), 8 MiB per-connection socket buffers (`glrSetSocketBuffers`), gralloc `lock()` skips the `rcColorBufferCacheFlush` round-trip |
 | `frameworks-native-egl-glrenderd.patch` | `frameworks/native` | egl loader picks the emulation libs when glrenderd answers, libagl otherwise. replaces `egl-use-software-renderer.patch` |
 | `frameworks-native-glconsumer-glgeterror-bound.patch` | `frameworks/native` | `libs/gui/GLConsumer.cpp`: bound the two `glGetError` drain loops at 8 — each iteration is a synchronous renderer round-trip, and an unbounded drain spins a surface's main thread for as long as the renderer is busy |
 | `sdk-glrenderd.patch` | `sdk` | glrenderd's host renderer, alpha twins for opaque configs (adreno won't copy an opaque pbuffer into rgba) and headless posting. Reliability set: `ReadBuffer` capped at 32 MiB (drop the client instead of doubling into a ~2 GB realloc), desync-proof `RenderThread` (one message per decode, resync, `[glr-rt]` diagnostics + stream-history dump), `IOStream`/`SocketStream` `peerPid()`/`shutdownStream()`, shared `SocketStream` gains 8 MiB socket buffers + reply/write timeouts. Perf set (TEST 35): poplar A6 (`FrameBuffer::setPostReadback` + `ColorBuffer::readbackTo` — the post readback lands in a presenter slot, no staging copy), opt-in async PBO readback (`persist.glr.asyncreadback`; measured *slower* on maple, ships off), swap-path timings (`rcFlushWindowColorBuffer`→`rcSetWindowColorBuffer` per connection) |
@@ -31,8 +31,14 @@ cd aosp-kitkat/system/core && git apply ../../patches/kitkat/<name>.patch
 
 Notes:
 
-- `files/` (when created) is a straight copy-overlay rooted at the AOSP
-  root: `cp -a files/* aosp-kitkat/`.
+- `files/` is a straight copy-overlay rooted at the AOSP root
+  (`cp -a files/* aosp-kitkat/`). It carries the whole-file additions a
+  `git diff` cannot:
+  `device/generic/goldfish/opengl/system/OpenglSystemCommon/RenderdStream.{cpp,h}`
+  — the guest-side reconnect stream that
+  `device-generic-goldfish-glrenderd.patch` references from `Android.mk` and
+  `SocketStream` but never creates; without the overlay a fresh tree cannot
+  build the patched guest libs.
 - Patches track the exact tree that produces the boot-verified maple zip;
   they are plain diffs (no commit metadata) so they survive re-syncs.
 - Do NOT commit blobs or full AOSP trees; `aosp-kitkat/` is gitignored.

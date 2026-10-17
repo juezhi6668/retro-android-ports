@@ -57,6 +57,10 @@ cd aosp-kitkat
 ( cd frameworks/base   && git apply ../../patches/kitkat/frameworks-base-keyguard-scrim-no-input.patch )
 ( cd frameworks/base   && git apply ../../patches/kitkat/frameworks-base-systemui-wallpaper-canvas-fallback.patch )
 
+# whole-file additions the diffs cannot carry (goldfish RenderdStream.*):
+# files/ is a copy-overlay rooted at the AOSP tree
+cp -a ../patches/kitkat/files/* .
+
 # device tree -> $AOSP_DIR/vendor/sony/maple
 scripts/sync-device-tree.sh maple kitkat
 ```
