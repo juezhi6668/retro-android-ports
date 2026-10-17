@@ -246,7 +246,6 @@ service adsp_boot /system/bin/sh /sbin/adsp-boot.sh
     user root
     group root
     disabled
-    oneshot
 
 # Wifi (Qualcomm WCN3990/cherokee, qca_cld3 built into the 4.4 kernel:
 # /sys/module/wlan exists, /dev/wlan chr 229,0, driver v5.1.1.77V live
