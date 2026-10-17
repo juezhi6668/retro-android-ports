@@ -33,6 +33,7 @@
 #define LOG_TAG "audio.primary.maple"
 
 #include <errno.h>
+#include <limits.h>
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
@@ -195,7 +196,14 @@ static struct pcm_config pcm_config_out = {
     .period_count = PLAYBACK_PERIODS,
     .format = PCM_FORMAT_S16_LE,
     .start_threshold = PLAYBACK_PERIOD_SIZE,
-    .stop_threshold = PLAYBACK_PERIOD_SIZE * PLAYBACK_PERIODS,
+    /* the adsp acks ASM buffers far faster than realtime (adm buffers
+     * internally), so hw_ptr keeps catching up with appl_ptr. with
+     * tinyalsa's default stop_threshold (= buffer frames) that reads as
+     * an underrun: SNDRV_PCM_TRIGGER_STOP + CMD_EOS ~30 ms into a fresh
+     * stream, after which the dsp stops acking and pcm_write dies with
+     * ETIMEDOUT (live kernel trace 2026-10-17). qcom's own hal uses
+     * INT_MAX here; verified against q6asm/q6adm dyn-debug. */
+    .stop_threshold = INT_MAX,
 };
 
 /* ---- output stream ---- */

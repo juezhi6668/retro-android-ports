@@ -417,3 +417,24 @@ is the method reference — this doc is the KitKat delta. Back to the
   power/menu key, or it will spend an hour "testing" a dark display. Also:
   `screencap` can return a constant image on the glrenderd stack (use fb0
   dumps), and `input keyevent 26` is a toggle, not "turn on".
+
+- **SERVREG_LOC (QMI 0x40) can be served from a 32-bit userspace over the
+  legacy IPC Router socket API** (maple TEST 40, 2026-10-17): even though
+  the stock 64-bit `pd-mapper` (QRTR client) cannot run on this kernel,
+  the kernel's `service-locator` client (`get_service_location` →
+  `qmi_svc_event_notifier_register(0x40, 1, 1)`) only needs *some* server
+  bound on `AF_MSM_IPC` (family 27, `SOCK_DGRAM`) with the name
+  `{service=0x40, instance=BUILD_INSTANCE_ID(1,1)=0x0101}`. A small static
+  musl binary (`devices/maple/kitkat/pdserve/pdserve.c`) does this: it
+  binds that name, receives the kernel's `GET_DOMAIN_LIST` request
+  (msg 0x21) and answers with the domain list transcribed from the modem
+  partition's `.jsn` files. The wire format is the standard QMI TLV
+  encoding — see `drivers/soc/qcom/service-locator-private.h` for the exact
+  `elem_info` arrays (`qmi_servreg_loc_get_domain_list_resp_msg_v01_ei`)
+  and `lib/qmi_encdec.c` for the TLV/string encoding rules (top-level
+  strings are bare bytes; nested strings are `[u8 len][bytes]`). This
+  unblocks the PD-restart chain (icnss, audio_pdr, slimbus) and lets the
+  modem's TMS query the AP's domain list. Caveat: the modem firmware on
+  this port still crashes every ~41 s (err-fatal interrupt, no SMEM reason),
+  so end-to-end Wi-Fi is not yet validated — the crash is independent of
+  the locator and likely needs a keepalive (rild) that this port lacks.

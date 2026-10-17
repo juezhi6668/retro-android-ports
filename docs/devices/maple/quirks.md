@@ -992,3 +992,44 @@ Next actions (checkboxes for the log):
         QRTR daemons. Same verdict kills the cnss-daemon chroot idea —
         wifi's remaining paths are modem boot or a kernel QRTR
         backport (both own workstreams).
+
+## Bringup log: service locator + pdserve (2026-10-17)
+
+- **TEST 39 (service_locator.enable=1, modem held, adsp after modem):**
+  boot_completed ~25 s; modem ONLINE at ~6 s; adsp-boot saw modem ONLINE
+  after 2 s and wrote `boot_adsp`; `/proc/asound/cards` shows
+  `msm8998-tasha-snd-card` — **no audio regression with locator=1**.
+  The locator's 5 stuck `pd_locator_work` kworkers (audio_pdr, icnss,
+  slimbus, ath10k, +) were the gate: the kernel waited for a SERVREG_LOC
+  (QMI 0x40, vers 1, instance 0x0101) server that nothing on this port
+  provided (the stock 64-bit `pd-mapper` cannot run on a 32-bit
+  userspace, and the earlier "no QRTR" verdict stands).
+- **pdserve** (`devices/maple/kitkat/pdserve/pdserve.c`, static musl
+  armv7, now shipped as `pdserve` in `PRODUCT_PACKAGES`): a 32-bit
+  SERVREG_LOC provider over `AF_MSM_IPC` (SOCK_DGRAM, family 27), binding
+  the name `{service=0x40, instance=0x0101}` and answering
+  `GET_DOMAIN_LIST` (msg 0x21) from the modem-partition `.jsn` tables
+  (modemuw.jsn, modemr.jsn, adspua.jsn, adspr.jsn). Verified live:
+  `servloc: ... Service locator initialized`, and the kernel connected to
+  instance 74 (adsp) and 180 (modem) servreg-notif services. The modem's
+  own TMS acts as a client of this server (requests for `tms/pdr_enabled`,
+  `tms/pddump_disabled`, `kernel/elf_loader`, `wlan/fw`, `avs/audio`
+  all arrive and are answered).
+- **Open blocker — modem stability:** the modem asserts its err-fatal
+  interrupt and restarts every ~41 s (`subsys-restart: ... Restart
+  sequence requested for modem`, failure reason
+  `smem_get_entry_no_rlock failed`). This predates pdserve (seen from
+  t=46 s in TEST 39) and is independent of the locator. Consequence: the
+  WLAN PD never starts (no `wlfw`/`wlan0` observed) because the modem's
+  root PD crashes ~3 s after the servreg-notif registration completes.
+  Suspected cause: no rild/keepalive on this port (stock keeps the modem
+  alive via `vendor.qcrild`); the modem watchdog fires without an AP-side
+  QMI client. A 64-bit chroot running `vendor/bin/hw/qcrild` (or a
+  minimal QMI keepalive) is the next workstream. Until then, Wi-Fi
+  bring-up code is correct and unblocks the PDR chain but cannot be
+  validated end-to-end.
+- **Pending fix (next boot image):** `adsp_boot` is not oneshot, so
+  `adsp-boot.sh` re-runs every ~5 s; make it `oneshot` (done in
+  `init.maple.rc`). Also bake the audio HAL fix
+  (`stop_threshold = INT_MAX` in `audio/audio_hw.c`) into the next
+  system image.

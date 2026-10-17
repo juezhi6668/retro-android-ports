@@ -23,25 +23,33 @@ BOARD_KERNEL_IMAGE_NAME := Image.gz-dtb
 # Cmdline from the live Lineage boot.img (abootimg config, TWRP dump
 # 2026-10-13) plus androidboot.hardware=maple. base 0x00000000 confirmed
 # (kerneladdr 0x8000), pagesize 4096 confirmed.
-# service_locator.enable=0 (was 1 from the Lineage cmdline): CHARQUIRKS
-# audio ("the audio techpack's audio_notifier is forced to ssr mode,
-# there's no pd-mapper for pdr when the card probes, so pdr never reports
-# and the card never registers (it did after ~5 minutes with
-# service_locator.enable=1, the cmdline sets 0)"). maple shows the same
-# symptom live 2026-10-16 (no soundcards, silent ASoC deferral); flip to 0
-# at this cmdline edit. verify-me: confirm msm8998-tavil-snd-card probes
-# after reflash (`cat /proc/asound/cards`).
-BOARD_KERNEL_CMDLINE := ehci-hcd.park=3 lpm_levels.sleep_disabled=1 sched_enable_hmp=0 sched_enable_power_aware=1 service_locator.enable=0 swiotlb=2048 androidboot.configfs=true androidboot.usbcontroller=a800000.dwc3 loop.max_part=7 androidboot.hardware=maple
-# Wifi experiment REVERTED 2026-10-16 (TEST 37): icnss.quirks=388
+# service_locator.enable=1 (the Lineage cmdline value): required for WLAN.
+# The servreg/PDR service locator is how icnss learns the modem's wlan_pd
+# domain ("wlan/fw" service) and registers its servreg listener; with the
+# locator off (TEST 38, 2026-10-17 live: "Service Locator not enabled",
+# icnss' registration failed, no WLFW QMI service, no qcacld probe) the
+# WLAN PD never starts. =0 came from CHARQUIRKS audio ("the audio
+# techpack's audio_notifier is forced to ssr mode, there's no pd-mapper
+# for pdr when the card probes, so pdr never reports and the card never
+# registers (it did after ~5 minutes with service_locator.enable=1)") and
+# was applied here 2026-10-16 (no soundcards, silent ASoC deferral).
+# get_service_location() is asynchronous (schedules pd_locator_work, which
+# waits for the modem's servreg_loc QMI service), and the ADSP clients
+# (tavil card, slimbus) want the locator's domain list — so init boots the
+# MODEM first and the ADSP after (adsp-boot.sh wait loop). verify-me on
+# flash: `cat /proc/asound/cards` + a playback test vs. the modem-up time.
+BOARD_KERNEL_CMDLINE := ehci-hcd.park=3 lpm_levels.sleep_disabled=1 sched_enable_hmp=0 sched_enable_power_aware=1 service_locator.enable=1 swiotlb=2048 androidboot.configfs=true androidboot.usbcontroller=a800000.dwc3 loop.max_part=7 androidboot.hardware=maple
+# Wifi path from TEST 39 (2026-10-17): the modem is booted and held from
+# init (modem-hold.sh) — opening /dev/subsys_modem runs the PIL boot
+# (mba.mbn + modem.mdt/modem.b00-28); stock holds that fd from rild/tad,
+# KitKat has neither. Modem + WLAN firmware ship in /system/vendor/firmware
+# via the FW_DIR block (full_maple.mk), so nothing depends on the modem
+# partition being mounted at boot (the earlier symlink+mount experiment
+# failed exactly that way: open EAGAIN when the mount was missing, TEST 38).
+# Earlier experiment REVERTED 2026-10-16 (TEST 37): icnss.quirks=388
 # (SKIP_QMI) bootloops at the Sony logo — the HDD probe runs immediately
-# but crashes without whatever the QMI WLFW handshake sets up (no pstore
-# captured; ramoops doesn't survive the loop). The bypass engages (that's
-# the good news: probe timing confirmed) but is not sufficient alone.
-# Next wifi paths: (a) cnss-daemon in a 64-bit Lineage chroot to do the
-# real QMI handshake (vendor/bin/cnss-daemon exists on Lineage; needs
-# vndbinder/pm-service per CHARQUIRKS — same chroot pattern as
-# sensors/glrenderd), or (b) modem boot (wlanmdsp.mbn is modem-side;
-# modem never boots here — same wall as cellular). See TEST 37.
+# but crashes without the QMI WLFW handshake (no pstore captured; ramoops
+# doesn't survive the loop).
 BOARD_BOOTIMAGE_PARTITION_SIZE := 67108864
 BOARD_RECOVERYIMAGE_PARTITION_SIZE := 67108864
 BOARD_SYSTEMIMAGE_PARTITION_SIZE := 5242880000

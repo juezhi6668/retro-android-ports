@@ -41,6 +41,8 @@ PRODUCT_COPY_FILES += \
     vendor/sony/maple/autowinch.sh:root/sbin/autowinch.sh \
     vendor/sony/maple/dump-boot-log.sh:system/bin/dump-boot-log.sh \
     vendor/sony/maple/glrenderd.sh:root/sbin/glrenderd.sh \
+    vendor/sony/maple/modem-hold.sh:root/sbin/modem-hold.sh \
+    vendor/sony/maple/adsp-boot.sh:root/sbin/adsp-boot.sh \
     vendor/sony/maple/gpio-keys.kl:system/usr/keylayout/gpio-keys.kl \
     vendor/sony/maple/clearpad.idc:system/usr/idc/clearpad.idc \
     vendor/sony/maple/wifi/wpa_supplicant_overlay.conf:system/etc/wifi/wpa_supplicant_overlay.conf \
@@ -69,7 +71,7 @@ PRODUCT_PACKAGES += \
     libsrec_jni
 
 # Firmware blobs live out-of-git on the build server at
-# vendor/sony/maple-fw/{adsp,wlan,bt}/ (pulled from the modem/bluetooth
+# vendor/sony/maple-fw/{adsp,wlan,modem,bt}/ (pulled from the modem/bluetooth
 # partitions + persist; mirrors the kernel-blob and maple-glr precedent so
 # sync-device-tree.sh --delete leaves them alone). Copy them into the
 # image where the kernel's firmware loader looks (firmware_class.path is
@@ -78,6 +80,8 @@ PRODUCT_PACKAGES += \
 #  - bdwlan.* (WLAN board-data/calibration; driver picks by board id) +
 #    wlan_mac.bin (Sony's MAC from persist; without it the MAC falls back
 #    to otp/soc serial per CHARQUIRKS)
+#  - modem/ (mba.mbn, modem.mdt, modem.b00-28, wlanmdsp.mbn — the PIL boot
+#    firmware modem-hold.sh triggers; TEST 39)
 #  - BT tlv/bin stay out for now (bluez bringup is a later change).
 FW_DIR := vendor/sony/maple-fw
 ifneq ($(wildcard $(FW_DIR)/adsp/adsp.mdt),)
@@ -85,6 +89,17 @@ PRODUCT_COPY_FILES += \
     $(foreach f,$(shell cd $(FW_DIR)/adsp && ls adsp.* cpe_9335.* 2>/dev/null),$(FW_DIR)/adsp/$(f):system/vendor/firmware/$(f)) \
     $(foreach f,$(shell cd $(FW_DIR)/wlan && ls bdwlan* 2>/dev/null),$(FW_DIR)/wlan/$(f):system/etc/wifi/$(f)) \
     $(FW_DIR)/wlan/wlan_mac.bin:system/vendor/firmware/wlan/qca_cld/wlan_mac.bin
+endif
+# Modem PIL firmware (TEST 39): mba.mbn + modem.mdt + modem.b00-28 +
+# wlanmdsp.mbn, pulled from the device's modem partition
+# (/dev/block/sde33 -> /vendor/firmware_mnt/image) and staged here so the
+# modem boots with NO partition mount — the live symlinks into the partition
+# failed exactly that way (open /dev/subsys_modem -> EAGAIN when the mount
+# was missing, TEST 38). ~58 MB, board-specific: keep out of git like the
+# adsp/wlan dirs.
+ifneq ($(wildcard $(FW_DIR)/modem/modem.mdt),)
+PRODUCT_COPY_FILES += \
+    $(foreach f,$(shell cd $(FW_DIR)/modem && ls mba.mbn modem.mdt modem.b* wlanmdsp.mbn 2>/dev/null),$(FW_DIR)/modem/$(f):system/vendor/firmware/$(f))
 endif
 
 # glrenderd's guest side. gralloc.maple and the egl loader fall back to gralloc.default and
@@ -95,7 +110,8 @@ PRODUCT_PACKAGES += \
     libGLESv2_emulation \
     gralloc.maple \
     gralloc.default \
-    lights.maple
+    lights.maple \
+    pdserve
 
 # glrenderd's chroot from tools/glrenderd/stage.py. it lives outside vendor/sony/maple so
 # sync-device-tree.sh's rsync --delete leaves it alone. the a540 firmware also goes where

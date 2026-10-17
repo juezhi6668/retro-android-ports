@@ -57,6 +57,24 @@ on init
 on init
     mount ext4 /dev/block/sde46 /system ro wait
 
+# qcom subsystem safety (CHARQUIRKS kernel: "every qcom subsystem defaults
+# to SYSTEM restart, so any dsp crash panics the phone. subsys.sh sets
+# adsp, slpi, wlan and cdsp to RELATED before anything boots them").
+# Live 2026-10-16 all 7 subsys (ipa_fws venus spss a540_zap adsp slpi
+# modem) read SYSTEM; stock init.maple.rc writes RELATED for all 7. This
+# runs BEFORE anything boots a subsystem (adsp-boot.sh, modem-hold): with
+# SYSTEM, closing /dev/subsys_modem rebooted the whole phone (seen live
+# 2026-10-17: "icnss: Modem went down, state: 0x80" → SYSTEM restart →
+# reboot). Writes that miss (older kernels) fail silently.
+on init
+    write /sys/bus/msm_subsys/devices/subsys0/restart_level RELATED
+    write /sys/bus/msm_subsys/devices/subsys1/restart_level RELATED
+    write /sys/bus/msm_subsys/devices/subsys2/restart_level RELATED
+    write /sys/bus/msm_subsys/devices/subsys3/restart_level RELATED
+    write /sys/bus/msm_subsys/devices/subsys4/restart_level RELATED
+    write /sys/bus/msm_subsys/devices/subsys5/restart_level RELATED
+    write /sys/bus/msm_subsys/devices/subsys6/restart_level RELATED
+
 on init
     mount ext4 /dev/block/sda15 /data nosuid nodev noatime nodiratime wait noauto_da_alloc,barrier=0
 
@@ -88,9 +106,14 @@ on init
     chmod 0755 /system/bin/dump-boot-log.sh
     chmod 0755 /sbin/autowinch.sh
 
-    # TODO: modem/firmware mounts (vfat /firmware, /bt_firmware) once the
-    # corresponding daemons exist. NOT mounted until needed — see
-    # fstab.maple + docs/devices/maple/quirks.md blocker 5.
+    # modem/firmware partitions are NOT mounted on this port: the modem +
+    # WLAN firmware (mba.mbn, modem.mdt/modem.b00-28, wlanmdsp.mbn) ships in
+    # /system/vendor/firmware via the FW_DIR block in full_maple.mk like the
+    # adsp blobs, so the PIL loader never depends on the vfat modem
+    # partition being mounted — the live symlink+mount experiment died
+    # exactly that way (open /dev/subsys_modem → EAGAIN "Try again" when
+    # the mount was missing, TEST 38). bt_firmware stays unmounted until
+    # bluez bringup.
     # TODO: 32-bit-userspace cgroup/lowmemorykiller tuning for 4 GB RAM
     # (cooper's 6-slot adj/minfree values do NOT carry over; re-derive from
     # KitKat ActivityManager defaults + measured pressure).
@@ -114,13 +137,23 @@ on post-fs-data
 
     # the kernel resolves this from the requester's root, glrenderd's chroot has the a540 firmware there
     write /sys/module/firmware_class/parameters/path /vendor/firmware
+    # Boot and hold the modem (modem-hold.sh): opening /dev/subsys_modem
+    # runs the PIL load from /vendor/firmware (mba.mbn + modem.mdt +
+    # modem.b00-28). Must come before adsp_boot: with the service locator
+    # enabled the ADSP clients (tavil card, slimbus) register through it,
+    # and the locator's domain data comes from the modem's servreg_loc
+    # service (TEST 39).
+    start pdserve
+    start modem_hold
     # Boot the adsp (TEST 36: `echo 1 > /sys/kernel/boot_adsp/boot` with
     # adsp.* staged is what unblocked the whole audio stack live —
     # tavil/tasha slim probes, WSA amps, Q6 DAIs, APR, and the tasha card
     # all registered within a second). adsp.* + cpe_9335.* ship in the
     # image via the FW_DIR block in full_maple.mk (out-of-git blobs).
     # Without this write the card never probes ("No soundcards found").
-    write /sys/kernel/boot_adsp/boot 1
+    # adsp-boot.sh waits (bounded, 20 s) for the modem when the locator is
+    # on, then writes boot_adsp regardless.
+    start adsp_boot
     # glrenderd owns the panel (single flipper): surfaceflinger in glrenderd mode posts
     # via rcFBPost and never FBIOPANs itself, so only this daemon pans fb0. it must be up
     # before surfaceflinger's first egl/gralloc probe (both latch hw-vs-software once per
@@ -173,6 +206,46 @@ service fuse_sdcard1 /system/bin/sdcard -u 1023 -g 1023 -w 1023 -d /mnt/media_rw
 service glrenderd /system/bin/sh /sbin/glrenderd.sh
     class core
     disabled
+
+# Modem boot + hold (TEST 39, 2026-10-17). Opening /dev/subsys_modem runs
+# subsystem_get_with_fwname("modem") → the PIL boot: MBA first (mba.mbn,
+# pil-msa.c:560), then modem.mdt + modem.b00-28 (peripheral-loader), all
+# from firmware_class.path=/vendor/firmware. The fd must stay open for the
+# life of the system: closing it shuts the modem down. Stock holds it from
+# rild/tad; KitKat here has neither, so the script opens it and sleeps.
+# WLAN depends on this: WLFW ("wlan/fw") is a modem QMI service, and the
+# WLAN PD only starts once the modem is up with icnss' servreg listener
+# registered. Missing firmware makes the open fail EAGAIN ("Try again",
+# not ENOENT — TEST 38); the script retries, so an init/mount race can't
+# wedge it silently.
+service modem_hold /system/bin/sh /sbin/modem-hold.sh
+    class core
+    user root
+    group root
+    disabled
+
+# SERVREG_LOC (QMI 0x40) provider: 32-bit stand-in for the 64-bit
+# pd-mapper the stock ROM runs (this port has no 64-bit userspace).
+# Serves the domain lists from the modem partition .jsn tables so the
+# kernel's service-locator (and the modem's TMS) can boot the WLAN PD.
+# Stays running for the life of the system.
+service pdserve /system/bin/pdserve
+    class core
+    user root
+    group root
+
+# ADSP boot, sequenced after modem_hold: with service_locator.enable=1 the
+# audio side (tavil/tasha card via audio_notifier, slimbus) registers
+# through the locator, whose domain data is served by the modem's
+# servreg_loc, so boot the ADSP after the modem reads ONLINE — bounded to
+# 20 s so audio still comes up if the modem never does. Replaces the bare
+# `write /sys/kernel/boot_adsp/boot 1` (TEST 36).
+service adsp_boot /system/bin/sh /sbin/adsp-boot.sh
+    class core
+    user root
+    group root
+    disabled
+    oneshot
 
 # Wifi (Qualcomm WCN3990/cherokee, qca_cld3 built into the 4.4 kernel:
 # /sys/module/wlan exists, /dev/wlan chr 229,0, driver v5.1.1.77V live
@@ -228,11 +301,6 @@ service iprenew_p2p /system/bin/dhcpcd -n
     disabled
     oneshot
 
-# qcom subsystem safety (CHARQUIRKS kernel: "every qcom subsystem defaults
-# to SYSTEM restart, so any dsp crash panics the phone. subsys.sh sets
-# adsp, slpi, wlan and cdsp to RELATED before anything boots them").
-# Live 2026-10-16 all 7 subsys (ipa_fws venus spss a540_zap adsp slpi
-# modem) read SYSTEM. Writes that miss (older kernels) fail silently.
-on post-fs-data
-    write /sys/bus/msm_subsys/devices/subsys4/restart_level RELATED
-    write /sys/bus/msm_subsys/devices/subsys5/restart_level RELATED
+# (qcom subsystem restart_level safety block moved to `on init`, right
+# after the /system mount — it must run before anything boots a subsystem.
+# See TEST 39.)

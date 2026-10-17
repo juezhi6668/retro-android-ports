@@ -27,7 +27,7 @@ is the oldest release that can still be synced. The full story — and why a
 | Device | Codename | Ports | Status |
 | --- | --- | --- | --- |
 | Samsung Galaxy Ace GT-S5830/L/T | `cooper` | Donut 1.6 (DRD35) | Boots on-device; launcher, touchscreen + capacitive keys, 160 dpi display, speaker audio. Cellular impossible (no Donut RIL for MSM7227); camera preview is test-pattern only. [Device page](docs/devices/cooper/README.md) |
-| Sony Xperia XZ Premium G8141/G8142 | `maple` | KitKat 4.4.4 (KTU84Q) | Boots to UI; touch, display, USB adb, hardware GL/GLES 3.2 (Adreno 540), brightness/sleep, emulated storage. WiFi/cellular/audio/camera/GPS still open. [Device page](docs/devices/maple/README.md) |
+| Sony Xperia XZ Premium G8141/G8142 | `maple` | KitKat 4.4.4 (KTU84Q) | Boots to UI; touch, display, USB adb, hardware GL/GLES 3.2 (Adreno 540), brightness/sleep, emulated storage, **audio playback (tasha card)**. WiFi interface still open: SERVREG_LOC now served in-tree by `pdserve` and the PDR chain (icnss) registers its notifier, but the modem root PD crashes every ~41 s before wlan_pd/WLFW can start (modem stability/keepalive open). [Device page](docs/devices/maple/README.md) |
 | Sony Xperia XZ1 G8341/G8342 | `poplar` | KitKat 4.4.4 (KTU84Q) | Boots to UI (launcher + nav bar, touch, display, USB adb, HW GL via glrenderd). Same yoshino/MSM8998 platform as maple; tree predates maple TEST 36-37. [Device page](docs/devices/poplar/README.md) |
 
 Each device has a main page (description, per-release status, links) and a
@@ -100,10 +100,13 @@ Each release has its own end-to-end guide; the README stays short:
       USB adb (Oct 2026); hardware GL/GLES on the Adreno 540; panel
       presentation; XZ1/poplar reliability + GL perf sets (TESTs 30–35);
       lights HAL; wifi feature/supplicant plumbing (TEST 36).
-- [ ] Finish maple: WiFi interface (WLFW/QMI handshake — likely
-      modem-gated), cellular, audio (playback stalls at PREPARED — ADSP
-      protection-domain work), camera, GPS, microSD; intermittent
-      pre-userspace boot hang documented.
+- [ ] Finish maple: WiFi interface (SERVREG_LOC now served in-tree by
+      `pdserve` and the PDR chain registers its notifier; blocked on the
+      modem root PD crashing every ~41 s — modem stability/keepalive open),
+      cellular, camera, GPS, microSD; intermittent pre-userspace boot hang
+      documented.
+- [x] maple audio: playback works on the msm8998-tasha card (audio HAL
+      `stop_threshold = INT_MAX`), stutter polish deferred.
 - [x] Generalize the layout/scripts for `devices/<codename>/<release>/`
       (cooper/donut + maple/kitkat share one sync script).
 - [x] KitKat 4.4.4 on `poplar` (sibling yoshino device): boots to launcher +
