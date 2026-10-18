@@ -119,7 +119,10 @@ Each release has its own end-to-end guide; the README stays short:
       pending** (no device attached — verify with the libhyb checklist).
 - [ ] Finish maple: WiFi interface (SERVREG_LOC now served in-tree by
       `pdserve` and the PDR chain registers its notifier; blocked on the
-      modem root PD crashing every ~41 s — modem stability/keepalive open),
+      modem root PD crashing every ~41 s — modem stability/keepalive open,
+      the missing userspace half is `cnss-daemon`/WLFW, mapped
+      per-subsystem in the
+      [Taimen daemon-chroot assessment](docs/advanced/taimen-kitkat-mapping.md)),
       cellular, camera, GPS, microSD; intermittent pre-userspace boot hang
       documented.
 - [x] maple audio: playback works on the msm8998-tasha card (audio HAL

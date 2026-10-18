@@ -348,11 +348,15 @@ above it as the original checklist.**
   on-partition, `adb reboot` straight after.)
 - **Check QRTR in kallsyms before planning any QMI userspace** (maple
   TEST 37): `grep -c qrtr /proc/kallsyms` with positive controls
-  (`binder`, `msm_ipc_router` must hit) — 0 means no modern QMI daemon
-  (cnss-daemon, pd-mapper, rmt_storage, tftp_server) can ever run,
-  chroot or not. Legacy IPC_ROUTER (`msm_ipc_router` thread,
-  `sysmon-qmi` reaching ADSP SSCTL) and SMD FastRPC
-  (`/dev/adsprpc-smd`) do work — constrain daemon designs to those.
+  (`binder`, `msm_ipc_router` must hit). 0 means anything linking
+  `libqrtr.so` directly cannot run (maple: `tftp_server`, `qrtr-ns`)
+  — but check the client library first: the vendor's `libqmi_cci` /
+  `libqmi_csi` are dual-transport (`qcci_`/`qcsi_ipc_router_ops` plus
+  the `qrtr_ops`, runtime probe) and fall back to the legacy IPC
+  Router, so "no modern QMI daemon can ever run, chroot or not" was
+  too strong (Taimen mapping §corrections, 2026-10-18). Legacy
+  IPC_ROUTER (`msm_ipc_router` thread, `sysmon-qmi` reaching ADSP
+  SSCTL) and SMD FastRPC (`/dev/adsprpc-smd`) provably work.
 - **Read the running kernel, not the defconfig** (maple TEST 36):
   `/proc/config.gz` is ground truth (`4.4.302-whatawurst+` has
   `CONFIG_QCA_CLD_WLAN=y` built-in and the full tavil/WSA/QDSP6 set,
@@ -473,6 +477,82 @@ lessons:
   whole `system/` dir) and rebuild the images whenever a component is
   removed — and never trust "I deleted the patch" for what is in the
   image (maple TEST 49).
+- **Resolve symbols in the dlopen's local group before KitKat's
+  globals.** Two camera modules can define the same global with
+  different sizes (`g_cam_log`); binding the wrong copy corrupts memory,
+  far away from the load. Taimen found the writer with a **gdbserver
+  hardware watchpoint**; our `linker.c` implements the same order
+  (hooks → local group, breadth-first from the dlopen root → loaded
+  libraries → KitKat).
+- **A load-time binary patch table is a legitimate compatibility tool
+  when it verifies itself.** Newer libbinder's
+  `ServiceManagerShim::getService` waits 5 s for every missing service
+  (each camera open); `linker.c` rewrites `movw r5, #5000` → `#0` only
+  when the four original bytes match, and logs loudly when they do not.
+  `HYB_TRACE_SYM=<symbol>` and `HYB_TRACE=1` trace resolution and hooks
+  when a closure misbehaves — port them with the loader.
+
+## Newer userspace beside the old one (taimen; assessed for maple)
+
+Taimen's port runs a 64-bit Android 11 chroot (`/system/v11`) next to
+32-bit KitKat, with one bridge per KitKat HAL for the daemons KitKat
+cannot run (modem, wifi, sensors, GNSS, NFC). That design is *not*
+ported here yet, but it is the reference for every remaining maple
+subsystem; their code and our per-subsystem assessment:
+[taimen-kitkat-mapping.md](../taimen-kitkat-mapping.md). The reusable
+lessons:
+
+- **KitKat's `toolbox` has no `chroot` and its `mount` cannot
+  bind-mount.** The way in is a tiny static helper that
+  `unshare(CLONE_NEWNS)`s, makes `/` private, bind-mounts `/dev`,
+  `/proc` and `/sys` wholesale into the root, `chroot`s and execs with a
+  clean environment — deliberately *not* passing KitKat's
+  `ANDROID_PROPERTY_WORKSPACE`. Wholesale `/dev` is fine; leaving the
+  binder node out keeps HIDL from starting up inside.
+- **A 64-bit userspace can run under a 32-bit Android**: the kernel is
+  64-bit, only the userspace is old. Build chroot programs with the NDK
+  (static helpers; dynamic daemons linked against the newer bionic
+  staged *inside* the chroot) and ship the newer system's own
+  `linker64` — a real file exists in a flat system dump as
+  `system/bin/bootstrap/linker64`, next to the `/apex` symlink.
+- **Ship a whole tree through a phony module, not
+  `PRODUCT_COPY_FILES`:** `LOCAL_POST_INSTALL_CMD := cp -a <dir>
+  $(TARGET_OUT)/<where>` carries empty directories and *absolute*
+  symlinks (a vendor `rfs/` is full of them) that the copy list silently
+  cannot.
+- **Bridge the HAL library, not the HIDL service.**
+  vndservicemanager and hwservicemanager do not exist on KitKat, so a
+  HIDL service cannot start — but its implementation `.so` can be
+  `dlopen`ed in-process by a bridge, which republishes it to a KitKat
+  HAL over an abstract AF_UNIX socket with hand-rolled fixed-width
+  fields (identical layout in 32- and 64-bit processes). The version
+  skew (NCI 2.0→1.0, camera HAL 3.5→3.0, sensor flush semantics) is
+  translated in the bridge, where both sides are visible.
+- **`-rdynamic` can override a vendor library's symbol:** exporting our
+  own `getRawServiceInternal` beats libhidlbase's, so an NXP NFC
+  secure-element lookup fails fast instead of waiting forever on a
+  missing hwservicemanager.
+- **Newer daemons log to logdw, not kmsg.** Android 8+ liblog writes
+  `/dev/socket/logdw` datagrams; with no logd the chroot is silent until
+  a receiver binds that socket and forwards *warnings and errors only*
+  to `/dev/kmsg` (info floods the kernel buffer). The libhyb equivalent
+  is HIDL `getService`/`AServiceManager` stubs returning "no service"
+  immediately.
+- **Check `libqmi_cci`, not just the kernel config, before writing off a
+  QMI stack.** Modern Qualcomm userspace can be dual-transport: maple's
+  vendor `libqmi_cci.so` has `qcci_ipc_router_ops` *and*
+  `qcci_qrtr_ops` with a runtime probe, so libqmi_cci clients can fall
+  back to the legacy IPC router on a no-QRTR kernel (static,
+  verify-me).
+- **Non-root QMI clients need the IPC-router security rules**
+  (`irsc_util <vendor>/etc/sec_config`). A root client like `pdserve`
+  never notices them; a daemon running as `system` hangs without them.
+- **Modem bring-up order matters:** create `/dev/block/bootdevice/by-name`
+  links by hand (ueventd will not), have the EFS daemon and firmware
+  server running, point `firmware_class.path` at the modem partition
+  only while it boots, and hold `/dev/subsys_modem` for the life of the
+  system (maple's `modem-hold.sh`, TEST 39, is the same trick without
+  the chroot).
 
 ## Container gotchas (verified)
 
@@ -525,6 +605,10 @@ lessons:
 - SELinux is enforcing-era in KitKat (it was absent/permissive in Donut).
   First bringup likely needs permissive + policy audit against the 4.4
   kernel's security hooks.
+- **Defining `LOCAL_DEX_PREOPT` at all enables preoptimisation, even to
+  `false`.** KitKat's build preopts as soon as the variable is defined;
+  prebuilt apps that must stay untouched (Open GApps nano, per Taimen's
+  release build) have to omit it entirely.
 
 ## KitKat userspace on a 4.4 kernel (vs Donut on 2.6.35)
 
@@ -555,11 +639,14 @@ lessons:
   dumps), and `input keyevent 26` is a toggle, not "turn on".
 
 - **SERVREG_LOC (QMI 0x40) can be served from a 32-bit userspace over the
-  legacy IPC Router socket API** (maple TEST 40, 2026-10-17): even though
-  the stock 64-bit `pd-mapper` (QRTR client) cannot run on this kernel,
-  the kernel's `service-locator` client (`get_service_location` →
-  `qmi_svc_event_notifier_register(0x40, 1, 1)`) only needs *some* server
-  bound on `AF_MSM_IPC` (family 27, `SOCK_DGRAM`) with the name
+  legacy IPC Router socket API** (maple TEST 40, 2026-10-17): no chroot
+  needed — even though the stock 64-bit `pd-mapper` looked like the only
+  way (it links dual-transport `libqmi_cci`, but the earlier no-QRTR
+  verdict is why this daemon exists), the kernel's `service-locator`
+  client (`get_service_location` →
+  `qmi_svc_event_notifier_register(0x40, 1, 1)`)
+  only needs *some* server bound on `AF_MSM_IPC` (family 27,
+  `SOCK_DGRAM`) with the name
   `{service=0x40, instance=BUILD_INSTANCE_ID(1,1)=0x0101}`. A small static
   musl binary (`devices/maple/kitkat/pdserve/pdserve.c`) does this: it
   binds that name, receives the kernel's `GET_DOMAIN_LIST` request

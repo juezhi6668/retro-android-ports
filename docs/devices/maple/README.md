@@ -26,7 +26,7 @@ put **KitKat 4.4.4** (a 32-bit, 2013 userspace) and, more recently,
 | USB | adb working (configfs gadget, `18d1:4ee7`) |
 | Lights | Brightness + sleep via the ported lights HAL (both backlight nodes) |
 | Storage | Emulated internal storage working (`/sdcard`); microSD still untested |
-| WiFi | Feature + supplicant services in place; driver loads but **no wlan0** — locator (SERVREG_LOC) now served by in-tree `pdserve` and the PDR chain (icnss) registers its notifier, but the modem root PD crashes every ~41 s before wlan_pd/WLFW can start; modem stability (keepalive/rild) is the open blocker |
+| WiFi | Feature + supplicant services in place; driver loads but **no wlan0** — locator (SERVREG_LOC) now served by in-tree `pdserve` and the PDR chain (icnss) registers its notifier, but the modem root PD crashes every ~41 s before wlan_pd/WLFW can start; modem stability (keepalive/rild) is the open blocker. Taimen's 64-bit daemon chroot (`cnss-daemon`/WLFW) is the reference path — [mapping](../../advanced/taimen-kitkat-mapping.md) |
 | Audio | Mixer controls verified on the probing tasha card; **no audible playback yet** — stalls at PREPARED in the ADSP (`msm_pcm_playback_copy` wait timeout); protection-domain/daemon workstream |
 | Cellular | No RIL library for this port — not working |
 | Camera / GPS / BT / fingerprint | Not started (proprietary HALs) |

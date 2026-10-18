@@ -995,6 +995,30 @@ Next actions (checkboxes for the log):
         QRTR daemons. Same verdict kills the cnss-daemon chroot idea —
         wifi's remaining paths are modem boot or a kernel QRTR
         backport (both own workstreams).
+      - QRTR follow-up (2026-10-18, static re-check from the dumps):
+        the kernel half of the verdict above stands (no CONFIG_QRTR),
+        but "no modern QMI userspace ... chroot or not" was too
+        strong, and "no linker64 anywhere" looked at the wrong copy.
+        Lineage 22.1's own vendor `libqmi_cci.so` is dual-transport —
+        `strings` shows `qcci_ipc_router_ops` AND `qcci_qrtr_ops`
+        with a runtime "QRTR NOT SUPPORTED/SUPPORTED" probe — and
+        `cnss-daemon` links it, so libqmi_cci clients can fall back to
+        the legacy IPC-router transport `pdserve` already uses (TEST
+        40). And the Lineage system image carries a real
+        `system/bin/bootstrap/linker64` (2,188,552 B aarch64 ELF; the
+        earlier probe saw the live phone mount, where apexes are
+        separate). The six daemons (cnss-daemon, pd-mapper,
+        rmt_storage, tftp_server, irsc_util, sensors.qti) are all
+        aarch64 ELF with `interpreter /system/bin/linker64`; transport
+        split: cnss-daemon, pd-mapper, sensors.qti (`libqmi_cci`) and
+        rmt_storage (`libqmi_csi`, also dual) are candidates, while
+        tftp_server links `libqrtr.so` directly and stays out. So the
+        cnss-daemon chroot idea is back on the table (WLFW is the
+        missing half of wifi); only the device can show whether the
+        libqmi_cci legacy path completes the handshake. `pdserve` still
+        supersedes `pd-mapper` regardless; per-subsystem assessment in
+        the Taimen mapping page (§"The daemon chroot and the HAL
+        bridges").
 
 ## Bringup log: service locator + pdserve (2026-10-17)
 
@@ -1005,8 +1029,8 @@ Next actions (checkboxes for the log):
   The locator's 5 stuck `pd_locator_work` kworkers (audio_pdr, icnss,
   slimbus, ath10k, +) were the gate: the kernel waited for a SERVREG_LOC
   (QMI 0x40, vers 1, instance 0x0101) server that nothing on this port
-  provided (the stock 64-bit `pd-mapper` cannot run on a 32-bit
-  userspace, and the earlier "no QRTR" verdict stands).
+  provided (the stock 64-bit `pd-mapper` needs a 64-bit userspace; see
+  the 2026-10-18 QRTR follow-up — `pdserve` stays the port's solution).
 - **pdserve** (`devices/maple/kitkat/pdserve/pdserve.c`, static musl
   armv7, now shipped as `pdserve` in `PRODUCT_PACKAGES`): a 32-bit
   SERVREG_LOC provider over `AF_MSM_IPC` (SOCK_DGRAM, family 27), binding

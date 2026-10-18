@@ -57,8 +57,9 @@ Step-by-step, from a pristine AOSP checkout to a flashable image:
   converged, what applied, what is queued).
 - [taimen-kitkat-mapping.md](taimen-kitkat-mapping.md) — how the
   Pixel 2 XL KitKat port (DoomGuy41/Taimen-KitKat) maps onto ours: the
-  libhyb graphics core plus every one of their patches, adopted or
-  skipped with reasons.
+  libhyb graphics core, every one of their patches (adopted or skipped
+  with reasons), and the assessment of their 64-bit daemon chroot +
+  HAL bridges for maple (modem/wifi/sensors/GNSS/NFC/BT).
 - [poplar-kitkat-gpu-fixes.md](poplar-kitkat-gpu-fixes.md) — sibling XZ1
   (`poplar`) GPU/display fix reference (developed on poplar, adopted by
   maple); superseded for maple by [libhyb](software/libhyb.md) — poplar

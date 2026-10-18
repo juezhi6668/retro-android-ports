@@ -139,13 +139,18 @@ are historical. Current status:
   likely modem-gated. TEST 36 has the full inventory.
 - TEST 37 verdicts (maple-verified, constrain all future radio work):
   SKIP_QMI panics at boot with AND without BDF staged (reverted); QRTR
-  is ABSENT from the kernel (0 kallsyms hits, legacy IPC_ROUTER only),
-  so NO QRTR userspace (cnss-daemon, pd-mapper, rmt_storage, tftp_server
-  — the 64-bit chroot idea is dead twice over: no `linker64` either).
-  Remaining wifi paths are modem boot or kernel QRTR backport. Audio's
-  remaining paths must likewise avoid QRTR: adsprpcd-over-SMD
-  (`/dev/adsprpc-smd` exists) or in-HAL ACDB via `/dev/msm_audio_cal`
-  (`maple-fw/acdbdata` staged).
+  is ABSENT from the kernel (0 kallsyms hits, legacy IPC_ROUTER only) —
+  so anything linking `libqrtr.so` directly is out (`tftp_server`,
+  `qrtr-ns`) and a kernel QRTR backport remains one wifi path. But "NO
+  QRTR userspace, chroot or not" was too strong (2026-10-18 re-check):
+  the vendor's `libqmi_cci`/`libqmi_csi` are dual-transport with a
+  legacy IPC-router fallback (`pdserve`'s transport) and a real
+  `linker64` ships in the dump — so cnss-daemon/pd-mapper/rmt_storage/
+  sensors.qti are *candidates* again, to be verified on device
+  ([taimen-kitkat-mapping.md](taimen-kitkat-mapping.md) §corrections;
+  quirks TEST 36 follow-up). Audio's remaining paths can still avoid
+  QMI entirely: adsprpcd-over-SMD (`/dev/adsprpc-smd` exists) or
+  in-HAL ACDB via `/dev/msm_audio_cal` (`maple-fw/acdbdata` staged).
 - Audio: tinyalsa `audio.primary.maple` written for the port in TEST 36
   (speaker = `speaker` + deep-buffer MM1/pcm0, mic = `handset-mic`/dmic1
   + MM1/pcm0, DEC7 104, no acdb, silent-safe pre-probe) with
