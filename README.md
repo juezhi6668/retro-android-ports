@@ -15,8 +15,8 @@ Verified so far:
   Xperia XZ Premium** (`maple`, 2017, MSM8998) — boots to the launcher with
   touch, USB adb, and hardware GL/GLES 3.2 on the Adreno 540 (first via the
   glrenderd chroot, then the in-process
-  [libhyb](docs/advanced/software/libhyb.md) stack, built 2026-10-18 —
-  flash/verification pending).
+  [libhyb](docs/advanced/software/libhyb.md) stack — built 2026-10-18,
+  flashed and verified on hardware 2026-10-19, 59.5–60.0 fps).
 
 Cupcake 1.5 is out of scope: `platform/manifest` no longer carries a
 `cupcake`/`android-1.5` branch (`android-1.6_r1` is the oldest), so Donut
@@ -29,7 +29,7 @@ is the oldest release that can still be synced. The full story — and why a
 | Device | Codename | Ports | Status |
 | --- | --- | --- | --- |
 | Samsung Galaxy Ace GT-S5830/L/T | `cooper` | Donut 1.6 (DRD35) | Boots on-device; launcher, touchscreen + capacitive keys, 160 dpi display, speaker audio. Cellular impossible (no Donut RIL for MSM7227); camera preview is test-pattern only. [Device page](docs/devices/cooper/README.md) |
-| Sony Xperia XZ Premium G8141/G8142 | `maple` | KitKat 4.4.4 (KTU84Q) | Boots to UI; touch, display, USB adb, hardware GL/GLES 3.2 (Adreno 540, now in-process via libhyb), brightness/sleep, emulated storage, **audio playback (tasha card)**. WiFi interface still open: SERVREG_LOC now served in-tree by `pdserve` and the PDR chain (icnss) registers its notifier, but the modem root PD crashes every ~41 s before wlan_pd/WLFW can start (modem stability/keepalive open). [Device page](docs/devices/maple/README.md) |
+| Sony Xperia XZ Premium G8141/G8142 | `maple` | KitKat 4.4.4 (KTU84Q) | Boots to UI; touch, display, USB adb, hardware GL/GLES 3.2 (Adreno 540 in-process via libhyb, 59–60 fps, verified 2026-10-19), brightness/sleep, emulated storage, **audio playback (tasha card)**. WiFi interface still open: SERVREG_LOC now served in-tree by `pdserve` and the PDR chain (icnss) registers its notifier, but the modem root PD crashes every ~41 s before wlan_pd/WLFW can start (modem stability/keepalive open). [Device page](docs/devices/maple/README.md) |
 | Sony Xperia XZ Premium G8141/G8142 | `maple` | Donut 1.6 (DRD35) | Boots to launcher; touch (stable from ~6.5 s, `vtouch` v1.2.0-maple3), tap-to-unlock keyguard, camera half-press → BACK / full-press → MENU, volume keys, readable key character maps (Settings works), portrait orientation. No audio/WiFi/cellular/camera HAL yet. [Device page](docs/devices/maple/README.md) |
 | Sony Xperia XZ1 G8341/G8342 | `poplar` | KitKat 4.4.4 (KTU84Q) | Boots to UI (launcher + nav bar, touch, display, USB adb, HW GL via glrenderd). Same yoshino/MSM8998 platform as maple; tree predates maple TEST 36-37. [Device page](docs/devices/poplar/README.md) |
 
@@ -115,8 +115,10 @@ Each release has its own end-to-end guide; the README stays short:
 - [x] maple graphics, second design: glrenderd (chroot + GL socket) replaced
       by [libhyb](docs/advanced/software/libhyb.md) — the Adreno driver runs
       in-process, `fbpresentd` presents through an MDSS atomic commit, the
-      glrenderd tooling/patches are deleted. Built 2026-10-18; **flash
-      pending** (no device attached — verify with the libhyb checklist).
+      glrenderd tooling/patches are deleted. Built 2026-10-18; flashed and
+      **verified on hardware 2026-10-19** (cold boots with md5 readbacks:
+      EGL 1.5 on the Adreno 540, 59.5–60.0 fps, scanout fences signal,
+      copy-path A/B clean — the checklist lives in the libhyb write-up).
 - [ ] Finish maple: WiFi interface (SERVREG_LOC now served in-tree by
       `pdserve` and the PDR chain registers its notifier; blocked on the
       modem root PD crashing every ~41 s — modem stability/keepalive open,

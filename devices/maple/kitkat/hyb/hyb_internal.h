@@ -38,6 +38,7 @@ typedef struct soinfo {
     struct soinfo *needed[MAX_NEEDED];
     int nneeded;
     int refcount, inited, linked, is_host;
+    int tls_module;        /* id in the loader's TLS module table, -1 without PT_TLS */
     struct soinfo *root;   /* root of the dlopen that loaded it: its resolution group */
     unsigned visit;        /* traversal mark (group_lookup) */
     struct soinfo *next;
@@ -52,4 +53,5 @@ soinfo *hyb_find_by_addr(const void *addr);
 int hyb_dladdr(const void *addr, Dl_info *info);
 int hyb_dl_iterate_phdr(int (*cb)(struct dl_phdr_info *, size_t, void *), void *data);
 uintptr_t *hyb_unwind_find_exidx(uintptr_t pc, int *count);
+void *hyb_tls_get_addr(void *arg);
 #endif

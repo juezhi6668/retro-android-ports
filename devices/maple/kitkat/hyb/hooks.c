@@ -564,14 +564,12 @@ ISW_L(iswspace)
 ISW_L(iswupper)
 ISW_L(iswxdigit)
 static int h_iswblank_l(wint_t c, void *l) { return h_iswblank(c); }
-/* KitKat's bionic has no dynamic TLS at all (__tls_get_addr appeared in later releases).
- * No library of the hardware closure calls it (checked with llvm-objdump); if one ever does,
- * fail loudly instead of jumping to garbage. */
+/* KitKat's bionic has no dynamic TLS at all: the loader provides the module ids and the
+ * per-thread blocks for the closure's general-dynamic accesses (libc++, libutils and
+ * libhidlbase each carry one thread_local variable, resolved by linker.c at load time). */
 static void *h_tls_get_addr(void *arg)
 {
-    __android_log_print(ANDROID_LOG_FATAL, "libhyb",
-                        "__tls_get_addr(%p) called: KitKat has no dynamic TLS", arg);
-    abort();
+    return hyb_tls_get_addr(arg);
 }
 
 /* ------------------------------------------------------------------ hook table */

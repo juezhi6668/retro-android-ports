@@ -17,10 +17,10 @@ staging tools: [`tools/libhyb/`](../../../tools/libhyb/); AOSP-side patches: the
 [`patches/kitkat/`](../../../patches/kitkat/README.md) table. Field lessons:
 [KitKat porting notes](../porting-notes/kitkat.md), [maple quirks](../../devices/maple/quirks.md).
 
-**Status: built 2026-10-18, image pending flash** — no device was attached while
-the port was written. Everything below marked `verify-me` comes from the Taimen
-port or from cross-checks against the sources, not from maple hardware; the
-on-device checklist is at the bottom.
+**Status: built 2026-10-18, flashed and verified on hardware 2026-10-19**
+(cold boots with md5 readbacks; the checklist at the bottom records what was
+measured and how). Anything still marked `verify-me` comes from the Taimen
+port or from cross-checks against the sources, not from maple hardware.
 
 ## Why in-process
 
@@ -45,7 +45,16 @@ on-device checklist is at the bottom.
   Taimen hardcoded `/system/a11` — one macro here). It handles PT_LOAD +
   PT_GNU_RELRO, REL/APS2 Android packed relocations, RELR, SysV + GNU hashes,
   symbol versions and DT_INIT/DT_INIT_ARRAY, recursive `DT_NEEDED`, and
-  `PT_ARM_EXIDX` (C++ unwinding). Search order when resolving a plain
+  `PT_ARM_EXIDX` (C++ unwinding). It also implements ARM TLS, which the newer
+  closure needs: a module table (`hyb_tls_register` per loaded library,
+  `DT_TLS` captured in `map_file`), `R_ARM_TLS_DTPMOD32`/`DTPOFF32` resolution
+  against that table, and a real `__tls_get_addr` that lazily allocates one
+  aligned block per thread per module and copies the `PT_TLS` template. Only
+  `DTPMOD32` is actually present (5 relocations, all symbol 0 → module = self,
+  `PT_TLS` a pure `.tbss`); `R_ARM_TLS_TPOFF32` stays unimplemented and fails
+  loudly, and the closure has no `__emutls_get_address` either. Without this the
+  loader rejected the relocations and the driver never loaded — zygote died at
+  `preloadOpenGL` (maple quirks TEST 49). Search order when resolving a plain
   library name: `vendor/lib/egl`, `vendor/lib/hw`, `vendor/lib`,
   `system/lib/hw`, `system/lib` (relative to `HYB_ROOT`); the newer side's
   absolute paths (e.g. `/vendor/lib/hw/gralloc.default.so`) are rebased
@@ -63,12 +72,10 @@ on-device checklist is at the bottom.
   `readelf`-walked closure of the driver + gralloc + dependencies (100 missing
   symbols found; the rest are provided by other means). Examples: `iswblank`,
   `strtold`, `aligned_alloc`, `fseeko64`/`ftello64`/`sendfile64`/`truncate64`,
-  `iswblank_l`, `localeconv`, fortify wrappers, `__tls_get_addr`.
-  `__tls_get_addr` is special: it aborts with a fatal message instead of
-  half-working — 0 call sites in the whole closure (`llvm-objdump` over
-  `libc++.so`, `libutils.so`, `libhidlbase.so`, `libgsl.so`, `libllvm-glnext.so`,
-  `libgrallocutils.so`, `libqdMetaData.so`), so it should never run. If it ever
-  does, that is a real bug to chase, not something to paper over.
+  `iswblank_l`, `localeconv`, fortify wrappers — and the TLS entry point
+  `__tls_get_addr`, which used to be an aborting tripwire until the closure
+  turned out to need TLS after all (see the loader bullet; it is now a real
+  implementation in `hyb/linker.c`, and `hooks.c` just re-exports it).
 - **EGL/GLES shims** (`egl/`): `libEGL_adreno.so` / `libGLESv1_CM_adreno.so` /
   `libGLESv2_adreno.so` keep their KitKat names but are thin shims (built from
   this tree) that load the real driver through libhyb and forward. GLES goes
@@ -139,17 +146,37 @@ on-device checklist is at the bottom.
   through it and SF itself never `FBIOPAN`s (`FramebufferSurface` consumes the
   HAL's `post`). `fbpresentd` performs the actual panel commit on gralloc's
   behalf.
-- **Zero-copy primary path**: gralloc connects to `@fbpresent` at fb-open time
-  and sends each buffer's descriptor once; presentation is an MDSS atomic commit
-  of the DMA0 pipe. No copy, no pan, no readback. `verify-me` on maple: Taimen
-  runs this path on the same MSM8998 generation.
+- **Zero-copy primary path** (verified on maple 2026-10-19): gralloc connects to
+  `@fbpresent` at fb-open time and sends each buffer's descriptor once;
+  presentation is an MDSS atomic commit of the DMA0 pipe. No copy, no pan, no
+  readback — **which also means fb0's memory is never written**: a
+  `dd if=/dev/graphics/fb0` readback of a driven panel is all zeros, so the
+  glrenderd-era fb0-decode check is blind on this path (the copy path below
+  exists partly for that). Evidence instead comes from `fbpresentd`, which logs
+  to `/dev/kmsg` (it used to log to stderr, which init points at /dev/null —
+  the presenter was mute while doing the work): `ready`, `client connected`,
+  the first three commits and one line per 600, carrying the *previous* frame's
+  MDP `release_fence` state. That fence only signals once DMA0 has read the
+  buffer for scanout, so
+  `fbpresentd: commit #2 1080x1920: previous frame scanned out` is the
+  panel-is-driven check (`NOT scanned out in 100 ms` is the failure text).
+  The same line carries the active-time frame rate
+  (`… 59.9 fps while active`); SF posts nothing while the screen is static, so
+  a rate averaged over idle gaps reads as a false slowdown (measured 2.3 fps
+  while `dumpsys SurfaceFlinger --latency` said 60.0 — the metric now skips
+  gaps over 100 ms).
 - **Copy fallback**: if the socket is absent or the daemon refuses (init starts
   `fbpresentd` in `post-fs-data`; a boot without the binary falls back), gralloc
   copies into fb0 and flips with **`FBIOPUT_VSCREENINFO` + new `yoffset`**.
   maple's mdss ignores `FBIOPAN_DISPLAY` (it logs `unable to allocate base pipe`
   and returns success without moving the offset — TEST 30 on maple); this is the
   same ioctl stock gralloc's `fb_post` uses. `persist.gralloc.fb_commit=0` forces
-  the copy path (useful for bisecting the presenter).
+  the copy path (useful for bisecting the presenter). Verified 2026-10-19: with
+  the property at 0 gralloc logs `atomic commit 0`, fb0 carries the composed
+  frame in both pages, and the readback decodes with the 4352-byte line
+  (1088 px) stride and crops cleanly to 1080x1920 — the fallback and the stride
+  both hold. The property lives in /data: it survives a system flash, so reset
+  it to 1 after an A/B test or the device stays on the slow path.
 - **Idle power collapse** of the MDP must stay disabled in the DT
   (`qcom,mdss-idle-power-collapse-enabled`, stripped by
   [`scripts/patch-maple-dtb.py`](../../../scripts/patch-maple-dtb.py)) or a
@@ -195,24 +222,45 @@ make bootimage systemimage                        # HYB_DIR/BIN_DIR copied by fu
 
 ## Status and on-device checklist
 
-Built (with the rest of the KitKat image) 2026-10-18; **not yet flashed**
-(no device attached). To verify on the first boot with a device:
+Built (with the rest of the KitKat image) 2026-10-18, flashed and **verified on
+hardware 2026-10-19** (cold boots, both images flashed with md5 readbacks). The
+checklist below is what was run, in order:
 
 1. `hybtest` — loads the closure, makes an ES3 context, draws and reads pixels
-   back; prints the driver strings. Failure here means the loader/hooks/closure,
-   not the framework.
-2. `dmesg` (liblog now lands in `/dev/kmsg` on this kernel, see the porting
-   notes): `gralloc.maple` fb0 line (`atomic commit 1`) and any
-   `presentation by fbpresentd refused (...)` fallback message.
-3. `dumpsys SurfaceFlinger` → `EGL implementation 1.4`,
-   `GLES: Qualcomm, Adreno (TM) 540, OpenGL ES 3.2` and climbing frame counts.
+   back; prints the driver strings. Verified: `EGL 1.5`, `Adreno (TM) 540`,
+   `OpenGL ES 3.2 V@331.0`, green clear + pixel readback, 2000 clears with
+   `glFinish` in 18.2 ms, 9 ms driver load in-process. Failure here means the
+   loader/hooks/closure, not the framework — the first real failure was TLS
+   relocations (loader bullet above).
+2. `dmesg` (liblog lands in `/dev/kmsg` on this kernel once the node is
+   writable, see the porting notes): the closure loads in `DT_NEEDED` order,
+   then `egl_adreno: Adreno 540 driver ready (gralloc import ok)`;
+   `gralloc.maple` logs `fb0 1080x1920, line 4352 bytes, double buffer 1,
+   BGRA 0, atomic commit 1` (a fallback logs
+   `presentation by fbpresentd refused (...)` instead). SurfaceFlinger's own
+   ALOG lines are readable in dmesg too (`SurfaceFlinger[pid]: …`).
+3. `dumpsys SurfaceFlinger` → `EGL implementation: 1.5`,
+   `GLES: Qualcomm, Adreno (TM) 540, OpenGL ES 3.2 V@331.0`,
+   `EGL_NATIVE_VISUAL_ID: 1`, `refresh-rate: 60.000002 fps`, layers composing
+   at 1080x1920; `sys.boot_completed=1`, `init.svc.surfaceflinger=running` and
+   `init.svc.fbpresentd=running` with no manual step.
 4. UI is GL-drawn now (hwui was never built in the glrenderd era):
-   `ls /system/lib/libhwui.so`, `dumpsys gfxinfo` shows real draw times,
-   scrolling stays smooth.
-5. `logcat`-free debugging works: `dmesg | grep -i hyb` for loader errors.
-6. Panel sanity: static UI stays up (idle power collapse), no parallelogram/shear
-   (stride), `fbpresentd` vs `persist.gralloc.fb_commit=0` A/B.
-7. FPS and power under animation vs the glrenderd baseline (~26–35 fps).
+   `ls /system/lib/libhwui.so` present, `dumpsys gfxinfo com.android.settings`
+   shows real DisplayList draw commands.
+5. `logcat`-free debugging works: `dmesg | grep -i hyb` for loader errors,
+   plus the per-process tags (`SurfaceFlinger[pid]`, `gralloc.maple[pid]`,
+   `libhyb[pid]`, `egl_adreno[pid]`, `Adreno[pid]`, `fbpresentd`).
+6. Panel sanity: `fbpresentd` reports `commit #2 … previous frame scanned out`
+   (MDP release fence → DMA0 really scans out); the framework lights the
+   backlight (both nodes 1638/4095 = brightness 102); static UI stays up
+   (~15 min idle, next burst still `59.9 fps while active`, no collapse);
+   `persist.gralloc.fb_commit=0` A/B: fb0 carries the frame in both pages and
+   decodes cleanly with the 4352-byte stride → the copy fallback works and the
+   stride/geometry is right.
+7. FPS: 59.5–60.0 measured with `dumpsys SurfaceFlinger --latency` (Settings
+   scroll) vs the glrenderd baseline (~26–35 fps). Power under animation was
+   not re-measured (no meter on the workstation) — TODO if the comparison
+   matters.
 
 ## Porting it to another device
 

@@ -10,7 +10,14 @@ set -euo pipefail
 AOSP=$(realpath "${1:?usage: $0 <aosp dir>}")
 SRC=$AOSP/vendor/sony/maple
 DEST=$AOSP/vendor/sony/maple-bin
-CACHE=${CACHE:-$AOSP/out-blobs}
+# Cache the NDK OUTSIDE $AOSP: the AOSP make walks the tree for Android.mk
+# files and the NDK's own sources/android/cpufeatures/Android.mk collides
+# with the tree's ndk/ copy ("MODULE.TARGET.STATIC_LIBRARIES.cpufeatures
+# already defined by ndk/sources/android/cpufeatures"), breaking every
+# later make. The old default was $AOSP/out-blobs and bit exactly that way
+# on 2026-10-19 once the NDK landed mid-build (first make parsed before the
+# unzip, the image rebuild did not).
+CACHE=${CACHE:-$HOME/.cache/retro-android-ports/ndk}
 NDK_URL=https://dl.google.com/android/repository/android-ndk-r21e-linux-x86_64.zip
 NDK_SHA1=c3ebc83c96a4d7f539bd72c241b2be9dcd29bda9
 

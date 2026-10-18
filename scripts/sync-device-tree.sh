@@ -31,5 +31,9 @@ DST="$AOSP/vendor/$VENDOR/$DEVICE"
 [ -d "$AOSP" ] || { echo "no AOSP checkout at $AOSP (set AOSP_DIR)" >&2; exit 1; }
 
 mkdir -p "$DST"
-rsync -a --delete "$SRC/" "$DST/"
+# `kernel` is the gitignored dumped kernel blob staged inside the synced path (§4 of the
+# build docs: vendor/<vendor>/<device>/kernel, TARGET_PREBUILT_KERNEL). A plain --delete
+# silently removes it and the next `make bootimage` dies with "No rule to make target
+# 'vendor/sony/maple/kernel'" — hit 2026-10-19, kitkat tree.
+rsync -a --delete --exclude kernel "$SRC/" "$DST/"
 echo "synced $SRC -> $DST"

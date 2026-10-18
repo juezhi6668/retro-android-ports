@@ -422,7 +422,7 @@ above it as the original checklist.**
   device). Same trick applies to any modern-side helper that must poke an
   ancient release's init.
 
-## libhyb lessons (maple, 2026-10-18; built, on-device verification pending)
+## libhyb lessons (maple, verified on hardware 2026-10-19)
 
 The in-process replacement for glrenderd — Adreno 540 driver + QTI
 gralloc1 from a Lineage 22.1 closure loaded into KitKat processes. Full
@@ -491,6 +491,51 @@ lessons:
   when the four original bytes match, and logs loudly when they do not.
   `HYB_TRACE_SYM=<symbol>` and `HYB_TRACE=1` trace resolution and hooks
   when a closure misbehaves — port them with the loader.
+- **Modern kernels hand vendor nodes to userspace root-only, and an
+  in-process driver is not root any more.** `/dev/kgsl-3d0` and `/dev/ion`
+  come up `root:root 0600`; the chroot-era design never cared (its renderer
+  ran as root), but a `libhyb`-style driver runs inside surfaceflinger (uid
+  `system`) and in every app process: `eglInitialize` returned
+  `EGL_BAD_ALLOC` (`Adreno-GSL: open(...) failed: errno 13`, `qdgralloc:
+  Failed to open ion device`) and SurfaceFlinger aborted with KitKat's
+  generic `no suitable EGLConfig found, giving up` — note that
+  `eglChooseConfig` reports *zero* configs for *any* `eglInitialize`
+  failure, so the EGLConfig attributes are a red herring. Fix in
+  `ueventd.<device>.rc` (`0666 root root` for both nodes; a group rule
+  cannot cover app uids, and these ports run SELinux permissive, so DAC is
+  the whole story). A live `chmod 666` proves it without a reflash.
+- **A service's `ALOG*` output needs a writable `/dev/kmsg` on kernels that
+  predate logd.** Old init gives every init-started service `/dev/null` as
+  stdout/stderr and old liblog's fallback sink is `/dev/kmsg` itself — but
+  the node is `0600 root` and liblog silently points `write_to_log` at
+  `__write_to_log_null` when `open()` fails EACCES. Result: root processes
+  and zygote descendants log (they open or inherit a kmsg fd) while
+  init-started services are mute, and the missing lines look like a hang.
+  Fix with `chmod 0622 /dev/kmsg` in the ramdisk's `init.rc` (write for
+  services, read stays root — `dmesg` needs CAP_SYSLOG anyway). Verify with
+  `log -p i -t TESTTAG hi` on both sides, or run the service by hand as
+  root (`stop surfaceflinger; surfaceflinger`) to see what it would have
+  said.
+- **KitKat's init.rc puts `onrestart restart zygote` on surfaceflinger.**
+  An SF crash-loop therefore kills zygote every few seconds and the
+  framework never finishes `preloadClasses`: one graphics bug presents as a
+  zygote/preload boot loop plus an SF abort plus "no boot". Check SF first
+  when a KitKat port restarts zygote in a loop.
+- **Newer 32-bit closure libraries carry TLS relocations; an old loader
+  must implement them.** `R_ARM_TLS_DTPMOD32` (and `DTPOFF32`) against a
+  `PT_TLS` with filesz 0 (a pure `.tbss` is normal for these libraries)
+  needs a module table and a real `__tls_get_addr`; a loader that rejects
+  unknown types fails the whole `dlopen`, usually at the EGL driver. Only
+  the *first* reloc type shows in the log if the loader stops there —
+  check the closure with `readelf -r` for all of DTPMOD32/DTPOFF32/TPOFF32
+  and for `__emutls_get_address` before concluding TLS is unnecessary
+  (shapes and the implementation are in the libhyb write-up).
+- **A present path that bypasses the framebuffer makes fb0 readbacks
+  blind.** With zero-copy commits fb0's memory is never written, so a
+  dump-and-decode "is it rendering?" harness sees an all-zero frame on a
+  perfectly driven panel; keep (or build) a copy fallback for verification
+  and use it for the geometry check (stride, shear), while the live check
+  is the presenter's fence/rate log.
 
 ## Newer userspace beside the old one (taimen; assessed for maple)
 

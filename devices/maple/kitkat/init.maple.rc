@@ -182,12 +182,21 @@ on boot
     # the trigger already started it (second start is a no-op).
     start usbudc
     start bootlog
+    # bootloop guard: reboots to TWRP only if the boot never comes alive
+    # (neither boot_completed nor adbd within the fuse) — see autowinch.sh
+    start autowinch
 
-# NOTE: autowinch (auto-return to TWRP after 15 min) was removed
-# 2026-10-15 once USB adb worked — it kept killing every good boot.
-# If a future boot wedges with no adb, re-add:
-#   on boot: start autowinch
-#   service autowinch /sbin/autowinch.sh (user root, disabled, oneshot)
+# autowinch (bootloop guard, reworked 2026-10-19 for the libhyb bringup):
+# the old form rebooted to TWRP unconditionally after 15 min and killed
+# every good boot. The script now stands down once the boot is alive
+# (sys.boot_completed=1 or adbd running) and only reboots to recovery when
+# neither happens within the fuse — the unattended case where the phone
+# would otherwise need a button dance. Killable over adb while up:
+#   adb shell pkill -f autowinch.sh
+service autowinch /sbin/autowinch.sh
+    user root
+    oneshot
+    disabled
 
 # DIAG (test 7): no USB/adb yet (DWC3 needs functionfs bringup — later),
 # so capture logs to files for TWRP-side pull. Remove once adb works.

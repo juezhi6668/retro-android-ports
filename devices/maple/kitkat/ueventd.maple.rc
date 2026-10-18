@@ -11,3 +11,14 @@
 /dev/uinput               0660   system     bluetooth
 /dev/video0               0660   system     camera
 /dev/graphics/fb0         0660   system     graphics
+
+# GPU + ION (2026-10-19): the Android 15 Adreno driver (libhyb) and QTI gralloc are
+# opened directly, in surfaceflinger (uid system), in every GL app process (u0_aNN)
+# and by zygote's preloadOpenGL. The kernel creates both nodes root:root 0600, so
+# open() failed EACCES, eglInitialize returned EGL_BAD_ALLOC and surfaceflinger
+# aborted with "no suitable EGLConfig found, giving up" — the whole UI chain. The
+# old glrenderd design never needed these: the renderer ran as root in a chroot.
+# 0666 (not a group rule) because the callers span system, u0_aNN and root and this
+# port runs SELinux permissive, so DAC is the whole story.
+/dev/kgsl-3d0             0666   root       root
+/dev/ion                  0666   root       root

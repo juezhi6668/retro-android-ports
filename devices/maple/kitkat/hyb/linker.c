@@ -1,9 +1,10 @@
 /* libhyb: ARM 32-bit ELF loader for newer-Android libraries inside KitKat processes.
  * On maple the loaded side is the LineageOS 22.1 (Android 15) vendor closure, HYB_ROOT
  * (/system/a15): Adreno 540 driver, QTI gralloc1 and their dependencies.
- * Handles: PT_LOAD and PT_GNU_RELRO segments, plain REL relocations, Android packed relocations
- * (APS2) and RELR, SysV and GNU hash tables, symbol versions (hidden ones ignored), DT_INIT and
- * DT_INIT_ARRAY, recursive DT_NEEDED, PT_ARM_EXIDX (C++ exception unwinding).
+ * Handles: PT_LOAD, PT_GNU_RELRO and PT_TLS segments, plain REL relocations, Android packed
+ * relocations (APS2) and RELR, SysV and GNU hash tables, symbol versions (hidden ones ignored),
+ * DT_INIT and DT_INIT_ARRAY, recursive DT_NEEDED, PT_ARM_EXIDX (C++ exception unwinding),
+ * general-dynamic TLS (R_ARM_TLS_DTPMOD32/DTPOFF32, __tls_get_addr).
  * Symbol resolution, as in the Android linker: hooks (hooks.c) > local group (root of the dlopen
  * that loaded the library, then its dependencies breadth-first) > loaded libraries > KitKat.
  * The local group matters: a global variable defined in several libraries with different sizes
@@ -53,6 +54,12 @@
 #endif
 #ifndef R_ARM_IRELATIVE
 #define R_ARM_IRELATIVE 160
+#endif
+#ifndef R_ARM_TLS_DTPMOD32
+#define R_ARM_TLS_DTPMOD32 17
+#endif
+#ifndef R_ARM_TLS_DTPOFF32
+#define R_ARM_TLS_DTPOFF32 18
 #endif
 #ifndef STT_GNU_IFUNC
 #define STT_GNU_IFUNC 10
@@ -364,6 +371,33 @@ static int apply_rel(soinfo *si, uint32_t offset, uint32_t info)
         resolve(si, idx, &s);
         *where = (uint32_t)s;
         return 0;
+    case R_ARM_TLS_DTPMOD32: {
+        /* all of the closure's TLS relocations carry symbol 0: the thread_local variable is
+         * local to this library, so the module id is ours; a named symbol would be a TLS
+         * variable of another loaded library, with a TLS module of its own */
+        int id = si->tls_module;
+        if (idx) {
+            const Elf32_Sym *s = &si->symtab[idx];
+            if (ELF32_ST_BIND(s->st_info) != STB_LOCAL) {
+                void *p = group_lookup(si, si->strtab + s->st_name);
+                soinfo *at = p ? hyb_find_by_addr(p) : NULL;
+                if (at && at->tls_module >= 0)
+                    id = at->tls_module;
+            }
+        }
+        if (id < 0) {
+            set_err("%s: TLS relocation without a TLS module", si->name);
+            return -1;
+        }
+        *where += (uint32_t)id;
+        return 0;
+    }
+    case R_ARM_TLS_DTPOFF32:
+        /* offset of the variable inside its module's TLS block; already baked in the slot
+         * for the closure's symbol-0 relocations */
+        if (idx && ELF32_ST_TYPE(si->symtab[idx].st_info) == STT_TLS)
+            *where += si->symtab[idx].st_value;
+        return 0;
     default:
         set_err("%s: unsupported ARM relocation %u", si->name, type);
         return -1;
@@ -449,6 +483,69 @@ static void apply_relr(soinfo *si)
     }
 }
 
+/* ------------------------------------------------------------------ thread-local storage */
+/* The closure uses the general-dynamic TLS model: libc++, libutils and libhidlbase each carry
+ * a small PT_TLS segment and one R_ARM_TLS_DTPMOD32 against symbol 0 (a module-local
+ * thread_local whose offset is baked in the word after the module id). KitKat's bionic has no
+ * dynamic TLS, so the loader hands out its own module ids and backs every module with a
+ * per-thread block, created on the first __tls_get_addr call from that thread and released by
+ * the pthread key destructor when the thread exits. Addresses are stable for the life of a
+ * thread, as the model requires, and the PT_TLS template is copied after relocations. */
+#define HYB_TLS_MODULES 16
+
+typedef struct {
+    pthread_key_t key;
+    const void *tdata;     /* PT_TLS file image (the template); all three are pure .tbss here */
+    size_t tdata_size;
+    size_t mem_size;
+    size_t align;
+} hyb_tls_module;
+
+static hyb_tls_module s_tls_modules[HYB_TLS_MODULES];
+static int s_tls_count;
+
+static int hyb_tls_register(soinfo *si, const Elf32_Phdr *ph)
+{
+    if (s_tls_count >= HYB_TLS_MODULES) {
+        set_err("%s: more than %d TLS modules", si->name, HYB_TLS_MODULES);
+        return -1;
+    }
+    hyb_tls_module *m = &s_tls_modules[s_tls_count];
+    m->tdata = ph->p_filesz ? (const void *)(si->bias + ph->p_vaddr) : NULL;
+    m->tdata_size = ph->p_filesz;
+    m->mem_size = ph->p_memsz ? ph->p_memsz : 1;
+    m->align = ph->p_align > sizeof(void *) ? ph->p_align : sizeof(void *);
+    if (pthread_key_create(&m->key, free)) {
+        set_err("%s: pthread_key_create: %s", si->name, strerror(errno));
+        return -1;
+    }
+    si->tls_module = s_tls_count++;
+    return 0;
+}
+
+/* the closure's dynamic TLS entry point: arg points at {module id, offset in the block} */
+void *hyb_tls_get_addr(void *arg)
+{
+    uint32_t id = ((uint32_t *)arg)[0], off = ((uint32_t *)arg)[1];
+    if (id >= (uint32_t)s_tls_count) {
+        LOGE("__tls_get_addr: no TLS module %u", id);
+        return NULL;
+    }
+    hyb_tls_module *m = &s_tls_modules[id];
+    void *block = pthread_getspecific(m->key);
+    if (!block) {
+        if (posix_memalign(&block, m->align, m->mem_size)) {
+            LOGE("__tls_get_addr: cannot allocate %u bytes", (unsigned)m->mem_size);
+            return NULL;
+        }
+        if (m->tdata_size)
+            memcpy(block, m->tdata, m->tdata_size);
+        memset((char *)block + m->tdata_size, 0, m->mem_size - m->tdata_size);
+        pthread_setspecific(m->key, block);
+    }
+    return (char *)block + off;
+}
+
 /* ------------------------------------------------------------------ loading */
 static int map_file(soinfo *si, int fd)
 {
@@ -485,6 +582,10 @@ static int map_file(soinfo *si, int fd)
 
     for (int i = 0; i < eh.e_phnum; i++) {
         Elf32_Phdr *p = &ph[i];
+        if (p->p_type == PT_TLS && hyb_tls_register(si, p)) {
+            free(ph);
+            return -1;
+        }
         if (p->p_type != PT_LOAD)
             continue;
         uint32_t seg_start = si->bias + p->p_vaddr, seg_end = seg_start + p->p_memsz;
@@ -671,6 +772,7 @@ static soinfo *load(const char *name, soinfo *root)
     }
     si = calloc(1, sizeof(*si));
     si->root = root ? root : si;
+    si->tls_module = -1;
     snprintf(si->path, sizeof(si->path), "%s", path);
     snprintf(si->name, sizeof(si->name), "%s", strrchr(path, '/') + 1);
     int r = map_file(si, fd);

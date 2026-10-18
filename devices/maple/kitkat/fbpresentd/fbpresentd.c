@@ -5,23 +5,54 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <stdarg.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <time.h>
 #include <unistd.h>
 #include <linux/fb.h>
 #define __user
 #include "../gralloc/mdss/msm_mdp_ext.h"
 #include "fbpresent.h"
 
-#define LOG(...) do { fprintf(stderr, "fbpresentd: " __VA_ARGS__); fputc('\n', stderr); } while (0)
+/* init gives services /dev/null as stderr and this port has no /dev/log, so log
+ * through /dev/kmsg: that is the only way a brought-up-without-a-terminal run shows
+ * what the presenter did (dmesg is the port's log; the fallback keeps a hand run
+ * readable). */
+static int s_klog = -1;
+
+static void klog(const char *fmt, ...)
+{
+    char msg[224], buf[256];
+    va_list ap;
+    int n;
+
+    va_start(ap, fmt);
+    vsnprintf(msg, sizeof(msg), fmt, ap);
+    va_end(ap);
+    if (s_klog < 0)
+        s_klog = open("/dev/kmsg", O_WRONLY | O_CLOEXEC);
+    if (s_klog >= 0) {
+        n = snprintf(buf, sizeof(buf), "<4>fbpresentd: %s\n", msg);
+        if (n > 0 && n < (int)sizeof(buf))
+            write(s_klog, buf, n);
+    } else {
+        fprintf(stderr, "fbpresentd: %s\n", msg);
+    }
+}
+#define LOG(...) klog(__VA_ARGS__)
 #define MAXBUF 8
 
 static struct { uint64_t id; int fd; } s_bufs[MAXBUF];
 static int s_fb, s_last_release = -1;
+static unsigned long long s_commits;
+static struct timespec s_last_ts;
+static unsigned long long s_active_frames;
+static long long s_active_ns;   /* summed gaps < 100 ms: SF posts nothing while idle */
 
 static void reset_cache(void)
 {
@@ -89,12 +120,47 @@ static int commit(const struct fbp_req *r, int fd)
     if (c.commit_v1.retire_fence >= 0)
         close(c.commit_v1.retire_fence);
     /* the buffer of the previous commit must not be rewritten before it is released */
+    int scanned = -1;   /* 0/1: the previous frame's release fence, >0 = scanned out */
     if (s_last_release >= 0) {
         struct pollfd p = { s_last_release, POLLIN, 0 };
-        poll(&p, 1, 100);
+        scanned = poll(&p, 1, 100) > 0;
         close(s_last_release);
     }
     s_last_release = c.commit_v1.release_fence;
+    /* Frame rate: SurfaceFlinger posts nothing while the screen is static, so only
+     * gaps under 100 ms count as "active" time — the average is otherwise dominated
+     * by idle and reads as a false slowdown (measured 60.0 fps with
+     * `dumpsys SurfaceFlinger --latency` while this line said 2.3 fps). */
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    if (s_commits > 0) {
+        long long dt = (long long)(now.tv_sec - s_last_ts.tv_sec) * 1000000000LL
+                     + (now.tv_nsec - s_last_ts.tv_nsec);
+        if (dt > 0 && dt < 100000000LL) {
+            s_active_ns += dt;
+            s_active_frames++;
+        }
+    }
+    s_last_ts = now;
+    s_commits++;
+    /* A release fence signals only once DMA0 has read the buffer for scanout, so its
+     * state separates "the panel is driven" from "the MDP merely accepts commits".
+     * First three frames, then one line per 600 with the active-time rate. */
+    if (s_commits <= 3 || s_commits % 600 == 0) {
+        char rate[24] = "";
+        if (s_commits % 600 == 0) {
+            if (s_active_ns > 0)
+                snprintf(rate, sizeof(rate), ", %.1f fps while active",
+                         s_active_frames * 1e9 / (double)s_active_ns);
+            s_active_frames = 0;
+            s_active_ns = 0;
+        }
+        if (scanned < 0)
+            LOG("commit #%llu %ux%u (first frame)%s", s_commits, r->xres, r->yres, rate);
+        else
+            LOG("commit #%llu %ux%u: previous frame %s%s", s_commits, r->xres, r->yres,
+                scanned ? "scanned out" : "NOT scanned out in 100 ms", rate);
+    }
     return 0;
 }
 
@@ -172,6 +238,9 @@ int main(void)
         if (cl < 0)
             continue;
         LOG("client connected");
+        s_commits = 0;   /* the per-client rate line counts this client's frames only */
+        s_active_frames = 0;
+        s_active_ns = 0;
         serve(cl);
         close(cl);
         release_display();

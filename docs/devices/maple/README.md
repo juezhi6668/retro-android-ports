@@ -19,10 +19,10 @@ put **KitKat 4.4.4** (a 32-bit, 2013 userspace) and, more recently,
 | Area | State |
 | --- | --- |
 | Boot | Boots to launcher (`sys.boot_completed=1`, 75 binder services), all partitions mounted |
-| Launcher / UI | Working; sustained animations ~26–35 fps |
+| Launcher / UI | Working; sustained animations 59.5–60.0 fps (libhyb, measured 2026-10-19 — was ~26–35 fps in the software-drawn glrenderd era) |
 | Touch | Working (Clearpad, full-range coords, nav bar + gpio keys) |
-| Display | Working, 1080×1920; `gralloc.maple` is the single fb0 flipper (`fbpresentd` atomic commit, copy + `FBIOPUT_VSCREENINFO` fallback) |
-| GPU | **Hardware GL/GLES 3.2 on the Adreno 540** via [libhyb](../../advanced/software/libhyb.md) — the driver runs in-process (this replaced the glrenderd chroot; built 2026-10-18, flash/verify pending) |
+| Display | Working, 1080×1920; `gralloc.maple` is the single fb0 flipper (`fbpresentd` atomic commit — release fences confirm DMA0 scanout — with copy + `FBIOPUT_VSCREENINFO` fallback, A/B-verified 2026-10-19) |
+| GPU | **Hardware GL/GLES 3.2 on the Adreno 540** via [libhyb](../../advanced/software/libhyb.md) — the driver runs in-process (this replaced the glrenderd chroot; built 2026-10-18, verified on hardware 2026-10-19: EGL 1.5, `Adreno (TM) 540`, UI GL-drawn through hwui) |
 | USB | adb working (configfs gadget, `18d1:4ee7`) |
 | Lights | Brightness + sleep via the ported lights HAL (both backlight nodes) |
 | Storage | Emulated internal storage working (`/sdcard`); microSD still untested |

@@ -109,5 +109,9 @@ Then, per image:
 - Read state back: `/data/misc/watch*.txt`, `/data/misc/sm-debug.txt`,
   `/data/dalvik-cache` count, `/data/tombstones`, `/sys/fs/pstore/*`
   (mount pstore in TWRP if empty), `/data/system/packages.xml`.
-- The phone auto-returns to TWRP 15 min after boot (autowinch service);
-  after that lands, `adb reboot` starts the next cycle.
+- Bootloop guard: the autowinch service returns the phone to TWRP only when
+  a boot never comes *alive* — no `sys.boot_completed` and no running adbd
+  within the fuse (default 900 s, `AUTOWINCH_FUSE` overrides). A debuggable
+  boot stands it down, and it can be killed over adb while up
+  (`adb shell pkill -f autowinch.sh`); a dead boot still comes back to TWRP
+  for pulling/re-flashing. `adb reboot` starts the next cycle.

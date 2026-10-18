@@ -14,7 +14,8 @@ Current state: **BOOTED 2026-10-15** — full KitKat userspace on the 4.4 kernel
 GL/GLES verified 2026-10-15** (Adreno 540 via glrenderd, GLES 3.2); on
 **2026-10-18 the graphics stack was replaced by
 [libhyb](../../advanced/software/libhyb.md)** (driver in-process,
-`fbpresentd` atomic commit — built, flash/verify pending, TEST 49). The
+`fbpresentd` atomic commit — built 2026-10-18, **flashed and verified on
+hardware 2026-10-19**, TEST 49). The
 tree in [`devices/maple/kitkat/`](../../../devices/maple/kitkat/) is a
 commented, boot-verified device tree. Remaining gaps (no
 cellular/audio/camera/WiFi yet — same documented-limitations posture as
@@ -1656,11 +1657,19 @@ Next actions (checkboxes for the log):
     `log/log.h`, which defines `ALOGI`/`ALOGE` — the first `rtc-restore`
     build failed at link with `undefined reference to 'LOGI'` (the
     unexpanded name became an implicit function call).
-  - **`__tls_get_addr` risk closed by inspection:** the closure never
-    calls it (0 call sites via `llvm-objdump` over `libc++`, `libutils`,
+  - **`__tls_get_addr`: the "risk closed by inspection" verdict was
+    wrong.** The build-time walk (`llvm-objdump` over `libc++`, `libutils`,
     `libhidlbase`, `libgsl`, `libllvm-glnext`, `libgrallocutils`,
-    `libqdMetaData`); `hooks.c` provides an aborting stub as a tripwire, so
-    if the driver ever needs TLS it fails loudly instead of corrupting.
+    `libqdMetaData`) found 0 call sites, and `hooks.c` shipped an aborting
+    tripwire on that basis. The closure *does* need TLS, though:
+    `libc++`, `libutils` and `libhidlbase` carry `R_ARM_TLS_DTPMOD32`
+    relocations (5, all symbol index 0, `PT_TLS` a pure `.tbss`), and the
+    first libhyb boot died on them (zygote killed at `preloadOpenGL`,
+    surfaceflinger aborting in `init()`). A relocation is not a call site —
+    `readelf -r` on the closure, not a disassembly symbol search, is what
+    answers "does this need TLS". The loader now implements
+    DTPMOD32/DTPOFF32 plus a real `__tls_get_addr` (fix and evidence at the
+    end of this TEST).
   - **32-bit `MSMFB_ATOMIC_COMMIT` crashes the kernel** (from the Taimen
     port; `verify-me` on maple): that is why `fbpresentd` is a 64-bit
     out-of-tree binary. The copy fallback still works from 32-bit
@@ -1675,9 +1684,146 @@ Next actions (checkboxes for the log):
     and `libhwui.so` is in `/system/lib`. Taimen also sets
     `TARGET_DISABLE_TRIPLE_BUFFERING := true` (two app buffers instead of
     three) — a candidate tuning here, not adopted without measurement.
-  - **Not yet verified on maple hardware:** no device was attached while
-    this was built. On the first flash check, in order: `hybtest` (ES3
-    context + pixel readback), `dmesg | grep -i hyb` (loader), the
-    `gralloc.maple` fb0 line (`atomic commit 1`), `dumpsys
-    SurfaceFlinger` (Adreno 540 strings), panel stays up (idle power
-    collapse), `persist.gralloc.fb_commit=0` A/B, fps.
+  - **The closure's TLS relocations made the driver unloadable (fixed
+    2026-10-19).** Symptom: on the first libhyb boot every GL consumer
+    died at once — zygote was killed a few seconds after start (last
+    message before the kill: `ZygoteInit.preloadOpenGL()`,
+    `ZygoteInit.java:237-245`) and surfaceflinger aborted inside
+    `SurfaceFlinger::init()+86`. Root cause: the Android 15 closure's
+    `libc++.so`, `libutils.so` and `libhidlbase.so` carry
+    `R_ARM_TLS_DTPMOD32` relocations (5, all with symbol index 0, slots in
+    RW/RELRO segments, `PT_TLS` a pure `.tbss` with filesz 0) and the
+    loader rejected unknown relocation types, so `libEGL_adreno.so` never
+    came up. Fix: real thread-local support in
+    [`hyb/linker.c`](../../../devices/maple/kitkat/hyb/linker.c) — a module
+    table (`hyb_tls_register` at load, `DT_TLS` captured in `map_file`),
+    `DTPMOD32`/`DTPOFF32` resolved against it, and a `__tls_get_addr` that
+    lazily allocates (and caches, per thread) one `posix_memalign` block per
+    module, copying the `PT_TLS` template. Only `DTPMOD32` is actually
+    used, 17 occurrences, all symbol 0 → module = self.
+    `R_ARM_TLS_TPOFF32` is deliberately *not* implemented and fails loudly
+    (same inspection that found `__emutls_get_address` absent, TEST 49
+    build evidence). Verified: `hybtest` gets an ES3 context
+    (`EGL 1.5`, `Adreno (TM) 540`, `OpenGL ES 3.2 V@331.0`), green clear
+    pixel-checks, and clears 2000 frames + `glFinish` in 18.2 ms. Driver
+    load takes 9 ms in-process.
+  - **The GPU and ION nodes are root-only, and nothing non-root could
+    render (fixed 2026-10-19).** Symptom: surfaceflinger aborted with
+    `LOG_ALWAYS_FATAL("no suitable EGLConfig found, giving up")`
+    (`SurfaceFlinger.cpp:407` → `selectConfigForAttribute` at 321 — all
+    three attempts returning 0 configs) while the same closure rendered
+    fine in `hybtest`. Root cause, visible only from a root-run
+    surfaceflinger (see the logging item below): `Adreno-GSL:
+    <ioctl_kgsl_driver_entry:777>: open(/dev/kgsl-3d0) failed: errno 13.
+    Permission denied`, `qdgralloc: Init: Failed to open ion device -
+    Permission denied`, then `libEGL: eglInitialize(...) failed
+    (EGL_BAD_ALLOC)` — KitKat's `eglChooseConfig` reports every config as
+    missing once `eglInitialize` failed, which is what the fatal assert
+    really meant. The kernel creates both nodes `root:root 0600` and
+    `ueventd.maple.rc` had no rules: the glrenderd design never needed
+    them, its renderer ran as root inside the chroot. Fix:
+    `/dev/kgsl-3d0` and `/dev/ion` at 0666 in
+    [`ueventd.maple.rc`](../../../devices/maple/kitkat/ueventd.maple.rc)
+    (0666 rather than a group rule: the callers are uid `system`, app uids
+    `u0_aNN` and root, and DAC is the whole story on this
+    SELinux-permissive port). A live `chmod 666` on an already-booted
+    device confirms the fix without a reflash; the rules only take effect
+    from a reflashed ramdisk. Related trap: **init's surfaceflinger
+    service has `onrestart restart zygote`** (stock KitKat), so an SF
+    crash-loop kills zygote every few seconds and the framework never
+    gets through `preloadClasses` — one graphics bug presented as three
+    unrelated failures (zygote restart loop, SF abort, no boot).
+  - **A service's `ALOG*` output goes nowhere unless `/dev/kmsg` is
+    writable (diagnosed 2026-10-19).** init gives services `/dev/null` as
+    stdout/stderr and this kernel has no `/dev/log`, so liblog's kmsg
+    fallback ([`patches/kitkat/README.md`](../../../patches/kitkat/README.md))
+    is the only sink — but `open("/dev/kmsg", O_WRONLY)` from uid `system`
+    fails EACCES and liblog then points `write_to_log` at
+    `__write_to_log_null`: the message is dropped with no error anywhere.
+    Only root processes (liblog opens kmsg itself) and zygote's
+    descendants (they inherit zygote's already-open fd) ever reached
+    dmesg, so app and system_server logs were visible while
+    surfaceflinger, netd and media were mute. Fix: `chmod 0622
+    /dev/kmsg` early in
+    [`init.rc`](../../../devices/maple/kitkat/init.rc) — 0622, not 0666:
+    non-root services may write the kernel log, reading stays root-only
+    (`dmesg` needs CAP_SYSLOG anyway). Verify with
+    `log -p i -t TESTTAG hi; dmesg | grep TESTTAG` as a non-root uid, or
+    from the booted device by running a service by hand (a root-run copy
+    opens kmsg itself: `stop surfaceflinger; surfaceflinger`).
+  - **Zero-copy presentation leaves fb0 black (trap, 2026-10-19).** With
+    the atomic-commit path active fb0's memory is never written — DMA0
+    scans the ION buffer itself. A `dd if=/dev/graphics/fb0` readback of a
+    perfectly driven panel is all zeros (both pages, `pan 0,0`), so the
+    fb0-decode checks from the glrenderd era say nothing here; use
+    `fbpresentd`'s commit lines below, `dumpsys SurfaceFlinger`, or force
+    the copy path (`persist.gralloc.fb_commit=0`) when a readback is what
+    you want.
+  - **KitKat's screen timeout is 60 s** (`def_screen_off_timeout`), so a
+    panel that is dark a minute after boot is the framework working, not a
+    dead backlight: `/sys/class/leds/lcd-backlight/brightness` reads 0 and
+    `settings put system screen_brightness 200` (idempotent; the lights HAL
+    writes both lcd-backlight and wled) brings it back.
+  - **`fbpresentd` now logs through `/dev/kmsg`** (init gives daemons
+    /dev/null): `ready`, `client connected/disconnected`, commit failures
+    with `strerror`/layer error code, the first three commits, and one line
+    every 600 commits with a measured rate —
+    `fbpresentd: commit #600 1080x1920: previous frame scanned out, 59.9 fps`.
+    The release-fence state is the panel evidence: the MDP only signals the
+    previous commit's `release_fence` once DMA0 has read the buffer for
+    scanout, so "scanned out" separates a driven panel from commits the MDP
+    merely accepted (a fence that never signals inside 100 ms is logged as
+    `NOT scanned out in 100 ms`).
+  - **On-device results (2026-10-19, first boot with the driver in the
+    boot path).** `dmesg | grep -i hyb` shows the closure loading in order
+    (`libc++`, `libutils`, `libhidlbase`, `libgsl`, `libllvm-glnext`, …,
+    `egl/libEGL_adreno.so`, `egl/libGLESv2_adreno.so`), then
+    `egl_adreno: Adreno 540 driver ready (gralloc import ok)`;
+    `gralloc.maple` reports `fb0 1080x1920, line 4352 bytes, double buffer
+    1, BGRA 0, atomic commit 1`; `dumpsys SurfaceFlinger` reports
+    `GLES: Qualcomm, Adreno (TM) 540, OpenGL ES 3.2 V@331.0`, `EGL
+    implementation: 1.5`, `EGL_NATIVE_VISUAL_ID: 1`, `refresh-rate:
+    60.000002 fps`, with the built-in display's layers composing at
+    1080x1920; and the boot reaches `sys.boot_completed=1` with
+    `init.svc.surfaceflinger=running` and `init.svc.bootanim=stopped`
+    without any manual step (the previous image needed the live
+    `chmod 666`, this one has the rules in the ramdisk). Node readback on
+    that boot: `crw-rw-rw- root root /dev/kgsl-3d0`, `crw-rw-rw- root
+    root /dev/ion`, `crw--w--w- root root /dev/kmsg`.
+  - **Backlight timeline on a cold boot (2026-10-19).** Full brightness
+    during the boot animation (`4095`, left by the kernel/bootloader),
+    then the framework takes over and both nodes read `1638`
+    (`mScreenBrightnessSetting=102` scaled to 0-4095) — the lights HAL
+    path of TEST 41 still works with libhyb; the panel is dark again a
+    minute later because `def_screen_off_timeout` is 60000 (stock) and
+    dims instead of switching off when `stay_on_while_plugged_in`
+    matches.
+  - **fps 59.5-60.0 measured, 59.9 reported by the presenter.**
+    `dumpsys SurfaceFlinger --latency
+    com.android.settings/com.android.settings.Settings` during a swipe
+    scroll: 127 frames over 2.10-2.12 s = 59.5/60.0 fps; the presenter's
+    600th-commit line reports `59.9 fps while active` for the same kind of
+    burst (50.7 for a slow scroll). **Trap:** the first version of that
+    line averaged over the whole window including idle gaps — SF posts
+    *nothing* while the screen is static — and printed `2.3 fps` while
+    `--latency` said 60.0; the metric now skips gaps over 100 ms, which is
+    what "while active" means.
+  - **`persist.gralloc.fb_commit=0` A/B (2026-10-19).** gralloc logs
+    `atomic commit 0`, the copy +
+    `FBIOPUT_VSCREENINFO`-yoffset path takes over, and fb0 readback now
+    contains the composed frame in *both* pages (`dd if=/dev/graphics/fb0
+    bs=4194304 count=4`, 2093/2108 sampled pixels non-zero); decoding with
+    the 4352-byte line (1088 px) stride and cropping to 1080x1920 gives a
+    clean UI frame — the TEST 30 fb0-decode check still works on this
+    path, and that is how the copy fallback itself was verified. Restored
+    `persist.gralloc.fb_commit=1` and reflashed: the property lives in
+    /data, so it survives a system flash — reset it by hand if an A/B is
+    left behind, otherwise the device stays on the slow path.
+  - **Panel stays up (idle power collapse).** After ~15 min of a static
+    screen the backlight still reads `1638` and the next swipe burst
+    presents at `59.9 fps while active` with every release fence
+    signalling — the DMA0 pipe did not collapse. The DT property strip
+    (`qcom,mdss-idle-power-collapse-enabled`, step 4 of the build docs) is
+    in the flashed kernel (md5 `4a7b3eaf…`). Visual confirmation over a
+    long idle still belongs to the owner; this is the automated
+    evidence.
