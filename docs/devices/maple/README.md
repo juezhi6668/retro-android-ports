@@ -8,8 +8,9 @@ The XZ Premium is Sony's 2017 flagship on Qualcomm's **Snapdragon 835
 (MSM8998)**: 4×2.45 + 4×1.9 GHz Kryo (ARM64) + Adreno 540, 4 GB RAM,
 64 GB UFS, microSD, a 5.5" 3840×2160 HDR panel (rendered at 1080p /
 density 410 in normal use), USB-C. It shipped with **Nougat 7.1.1**;
-`maple` is the single-SIM G8141, `maple_dsds` the dual-SIM G8142. Our port
-puts **KitKat 4.4.4** — a 32-bit, 2013 userspace — on it.
+`maple` is the single-SIM G8141, `maple_dsds` the dual-SIM G8142. Our ports
+put **KitKat 4.4.4** (a 32-bit, 2013 userspace) and, more recently,
+**Donut 1.6** (AOSP `android-1.6_r2`, DRD35) on it.
 
 ## Status
 
@@ -30,6 +31,21 @@ puts **KitKat 4.4.4** — a 32-bit, 2013 userspace — on it.
 | Cellular | No RIL library for this port — not working |
 | Camera / GPS / BT / fingerprint | Not started (proprietary HALs) |
 
+### Donut 1.6 — AOSP `android-1.6_r2` (DRD35) — boots to UI
+
+| Area | State |
+| --- | --- |
+| Boot | Boots to launcher (`sys.boot_completed=1`); touch live ~6.5 s after boot |
+| Launcher / UI | Working; portrait orientation (flip-cover lid sensor no longer forces landscape) |
+| Touch | Working (Clearpad, full-range coords 0..2159 / 0..3839, vtouch proxy) |
+| Keyguard | Tap-to-unlock ("Tap to unlock."); camera full-press → MENU |
+| Camera key | Half-press → BACK, full-press → MENU (WAKE_DROPPED); volume keys work |
+| Display | Working, 1080×1920 software SurfaceFlinger (no glrenderd on this port) |
+| Settings | Opens without crashing (key character maps fixed to mode 0644) |
+| USB | adb working (configfs gadget, `18d1:4ee7`) |
+| Power button | Handled by the kernel's `powerkey_handle` (locks only when USB is unplugged); see quirks TEST 47 |
+| Audio / WiFi / Cellular / Camera HAL | Not started (proprietary HALs; Donut era) |
+
 Known device quirks: rare **pre-userspace boot hang** (stuck on the Sony
 splash, **zero USB** — recover with a TWRP round-trip before reflashing);
 the keyguard window caps screen-off at ~10 s (stock KitKat behavior, power
@@ -43,10 +59,20 @@ live under [GitHub Releases](https://github.com/pukikiko/retro-android-ports/rel
 ## Documentation and links
 
 - [**Device quirks**](quirks.md) — hardware snapshot, flash layout, the
-  full TEST 1–41 bringup log, blockers and verified fixes.
+  full TEST 1–48 bringup log, blockers and verified fixes.
 - [KitKat 4.4.4 porting notes](../../advanced/porting-notes/kitkat.md) —
   generic playbook this port produced.
+- [Donut 1.6 porting notes](../../advanced/porting-notes/donut.md) —
+  generic playbook (touch handshake, MENU-less keyguards, firmware-load
+  fallback, key character maps).
 - [Building KitKat for maple](../../advanced/build/kitkat.md).
-- [Device tree](../../../devices/maple/kitkat/) (`devices/maple/kitkat/`)
-  and [AOSP patches](../../../patches/kitkat/README.md) (`patches/kitkat/`).
-- Tool used here: [glrenderd](../../advanced/software/glrenderd.md).
+- [Building Donut for maple](../../advanced/build/donut.md) — chroot recipe,
+  patch order, packaging and flashing.
+- [Device tree (KitKat)](../../../devices/maple/kitkat/)
+  (`devices/maple/kitkat/`) and [patches](../../../patches/kitkat/README.md)
+  (`patches/kitkat/`).
+- [Device tree (Donut)](../../../devices/maple/donut/)
+  (`devices/maple/donut/`) and [patches](../../../patches/donut/README.md)
+  (`patches/donut/`).
+- Tools used here: [glrenderd](../../advanced/software/glrenderd.md),
+  [vtouch](../../advanced/software/vtouch.md).

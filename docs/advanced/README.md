@@ -16,7 +16,7 @@ generalize across devices of that era.
 
 | Release | AOSP branch | Notes | Ported to |
 | --- | --- | --- | --- |
-| Donut 1.6 | `android-1.6_r2` (DRD35) | [porting-notes/donut.md](porting-notes/donut.md) | [cooper](../devices/cooper/README.md) |
+| Donut 1.6 | `android-1.6_r2` (DRD35) | [porting-notes/donut.md](porting-notes/donut.md) | [cooper](../devices/cooper/README.md), [maple](../devices/maple/README.md) |
 | KitKat 4.4.4 | `android-4.4.4_r2` (KTU84Q) | [porting-notes/kitkat.md](porting-notes/kitkat.md) | [maple](../devices/maple/README.md), [poplar](../devices/poplar/README.md) |
 
 Planned playbooks (not written yet — they land with the first port of each
@@ -27,8 +27,10 @@ Lollipop, Marshmallow, Nougat.
 
 Step-by-step, from a pristine AOSP checkout to a flashable image:
 
-- [Building Donut 1.6 for cooper](build/donut.md) — Hardy i386 chroot,
-  JDK 5, GCC 4.2.3, cooper BML packaging.
+- [Building Donut 1.6 for cooper/maple](build/donut.md) — Hardy i386 chroot,
+  JDK 5, GCC 4.2.3, cooper BML packaging; maple uses the same recipe with
+  the 4096-page boot.img repack, the ext4 system.img packaging script and
+  the maple device tree (`devices/maple/donut/`).
 - [Building KitKat 4.4.4 for maple](build/kitkat.md) — Trusty/JDK 6
   container, prebuilt 4.4 kernel, simg2img/TWRP flashing, glrenderd
   (same steps for `poplar` with the block-map/panel deltas in

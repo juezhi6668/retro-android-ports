@@ -1,0 +1,24 @@
+diff --git a/phone/com/android/internal/policy/impl/PhoneWindowManager.java b/phone/com/android/internal/policy/impl/PhoneWindowManager.java
+index 8140b3d..c9bbb6b 100644
+--- a/phone/com/android/internal/policy/impl/PhoneWindowManager.java
++++ b/phone/com/android/internal/policy/impl/PhoneWindowManager.java
+@@ -140,7 +140,9 @@ public class PhoneWindowManager implements WindowManagerPolicy {
+     static final float SLIDE_TOUCH_EVENT_SIZE_LIMIT = 0.6f;
+     
+     // Debugging: set this to have the system act like there is no hard keyboard.
+-    static final boolean KEYBOARD_ALWAYS_HIDDEN = false;
++    // maple has a flip-cover hall sensor (bu520x1nvx) that reports SW_LID, but
++    // no sliding keyboard: the lid state must not force landscape rotation.
++    static final boolean KEYBOARD_ALWAYS_HIDDEN = true;
+     
+     static public final String SYSTEM_DIALOG_REASON_KEY = "reason";
+     static public final String SYSTEM_DIALOG_REASON_GLOBAL_ACTIONS = "globalactions";
+@@ -1735,7 +1737,7 @@ public class PhoneWindowManager implements WindowManagerPolicy {
+             // case for nosensor meaning ignore sensor and consider only lid
+             // or orientation sensor disabled
+             //or case.unspecified
+-            if (mLidOpen) {
++            if (mLidOpen && !KEYBOARD_ALWAYS_HIDDEN) {
+                 return Surface.ROTATION_90;
+             } else {
+                 if (useSensorForOrientationLp(orientation)) {

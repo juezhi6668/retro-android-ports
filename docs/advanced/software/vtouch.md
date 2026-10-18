@@ -59,3 +59,42 @@ Froyo `vtouch` 1.2.0, cooper-adapted.
    resolution) and type-A vs type-B handling in `vtouch.c` — the cooper
    comments mark each adaptation.
 5. Ship a `.kl` for the virtual device with a Donut-legal flag set.
+
+## Maple (Sony Xperia XZ Premium) adaptation
+
+- Source: `devices/maple/donut/vtouch/vtouch.c` (built as `maple_vtouch`,
+  shipped in the ramdisk at `/sbin/maple_vtouch`, started by `init.maple.rc`
+  `service vtouch /sbin/maple_vtouch /dev/input/event7`, disabled + started
+  in `init.rc on boot` before `class_start default` so the virtual node
+  replaces event7 before system_server's EventHub opens the input devices).
+- Version in this port: v1.2.0-maple3. Maple-specific behaviour on top of
+  the cooper base:
+  - MT axes: clearpad declares only MT axes (ABS_MT_POSITION_X/Y, TOOL_TYPE,
+    TRACKING_ID, PRESSURE) with no BTN_TOUCH/ABS_X/ABS_Y/ABS_MT_SLOT and
+    streams protocol type-A; groups commit on TRACKING_ID >= 0 (pressure/
+    major as fallbacks), lift is an empty group. Source ranges 0..2159 x
+    0..3839 (2x the 1080x1920 panel) are copied to the virtual device and
+    Donut's framework scales them.
+  - The panel needs a userspace kick: `clearpad_probe` parks after i2c probe
+    with `post_probe_start sysfs is required to start post probe`; vtouch
+    writes `1` to `/sys/devices/virtual/input/clearpad/post_probe_start`
+    (via the stable input-class symlink, never `inputN`) after the virtual-
+    node substitution and before the relay loop, retrying 1x/s for up to
+    60 s (the node appears at ~2.9 s kernel time, after init's `on boot`).
+  - Firmware-load stall (v1.2.0-maple3): the post-probe "ensure firmware"
+    step runs `request_firmware(touch_module_id_0xd1.img)`; Donut has no
+    userspace firmware loader, so each attempt blocks the firmware class'
+    60 s fallback timeout and the driver retries 3x — touch only comes
+    alive ~184 s after boot. vtouch sets `/sys/class/firmware/timeout` to
+    1 first thing in `start_post_probe()`, so the retries fail fast and the
+    post probe completes ~4 s in. Verified knob writable (readback 1);
+    end-to-end timing verified only after the next flash+reboot (the driver
+    refuses to re-run: `already post probed, need reboot`).
+  - Verified boot evidence: dmesg `start post probewith post_probe_start
+    sysfs` -> `begin 'post probe' session` -> `ensure firmware` -> device id
+    `PLG1163-C1` (family 0xd1, fw rev 0x03.02) -> `end post probe ...
+    (rc=0)`; `/dev/.vtouch.log` shows `touch panel post probe started
+    (try 0)` + `relaying on /dev/input/event7`; `/proc/bus/input/devices`
+    shows `maple_vtouch` (input8, Handlers event8->event7) carrying
+    BTN_TOUCH + ABS_X/Y and the real `clearpad` (input7) preserved as
+    `/dev/input/vtouch_saved`.

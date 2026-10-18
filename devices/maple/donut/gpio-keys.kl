@@ -1,0 +1,17 @@
+# gpio-keys.kl — maple hardware keys (Donut 1.6).
+# Scancodes from the KitKat port's gpio-keys.kl (yoshino): volume up/down
+# plus the two-stage camera key (half press 528, full press 766). POWER
+# comes from the separate qpnp_pon device (falls back to qwerty.kl).
+# Donut's KeyLayoutMap discards the whole file on an unknown token — keep
+# to the Donut KEYCODES/FLAGS sets.
+#
+# maple has no MENU key and Donut predates on-screen action bars, so the
+# camera key's FULL press doubles as MENU (unlocks the keyguard, opens
+# app/launcher menus); half press is now BACK for in-app navigation. The
+# camera's autofocus (FOCUS) on half-press is given up for this. WAKE_DROPPED
+# on the full press mirrors MENU in qwerty.kl (wakes the screen, dropped
+# when it woke); the half press does not wake.
+key 115   VOLUME_UP         WAKE
+key 114   VOLUME_DOWN       WAKE
+key 528   BACK
+key 766   MENU              WAKE_DROPPED

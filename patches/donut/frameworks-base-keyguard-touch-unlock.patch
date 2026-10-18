@@ -1,0 +1,17 @@
+diff --git a/core/res/res/values/strings.xml b/core/res/res/values/strings.xml
+index aaaebbb..f2ea785 100644
+--- a/core/res/res/values/strings.xml
++++ b/core/res/res/values/strings.xml
+@@ -1176,10 +1176,10 @@
+     <string name="lockscreen_screen_locked">Screen locked.</string>
+ 
+     <!-- when pattern lock is enabled, tell them about the emergency dial -->
+-    <string name="lockscreen_instructions_when_pattern_enabled">Press Menu to unlock or place emergency call.</string>
++    <string name="lockscreen_instructions_when_pattern_enabled">Tap to unlock or place emergency call.</string>
+ 
+     <!-- On the keyguard screen, when pattern lock is disabled, only tell them to press menu to unlock.  This is shown in small font at the bottom. -->
+-    <string name="lockscreen_instructions_when_pattern_disabled">Press Menu to unlock.</string>
++    <string name="lockscreen_instructions_when_pattern_disabled">Tap to unlock.</string>
+ 
+     <!-- On the unlock pattern screen, shown at the top of the unlock screen to tell the user what to do. Below this text is the place for theu ser to draw the pattern. -->
+     <string name="lockscreen_pattern_instructions">Draw pattern to unlock</string>
