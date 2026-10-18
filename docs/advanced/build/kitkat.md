@@ -222,4 +222,6 @@ source fetch, the two out-of-git inputs and the flash conversion differ.
   `dd` from `/data/media`. Read-backs must use the exact image size — the
   system partition is 15,052,800 sectors (~7.2 GB) and boot 131,072 (64 MB),
   so `dd if=<partition> bs=4096 count=<image bytes>/4096 | md5sum` is the
-  form that matches the staged file. First-boot checklist: §7.
+  form that matches the staged file. TWRP has busybox `md5sum`; the *booted*
+  port's toolbox has only `md5` (and no `head`/`tail`/`grep`), so script
+  on-device helper commands accordingly. First-boot checklist: §7.

@@ -1814,11 +1814,14 @@ Next actions (checkboxes for the log):
     contains the composed frame in *both* pages (`dd if=/dev/graphics/fb0
     bs=4194304 count=4`, 2093/2108 sampled pixels non-zero); decoding with
     the 4352-byte line (1088 px) stride and cropping to 1080x1920 gives a
-    clean UI frame — the TEST 30 fb0-decode check still works on this
-    path, and that is how the copy fallback itself was verified. Restored
-    `persist.gralloc.fb_commit=1` and reflashed: the property lives in
-    /data, so it survives a system flash — reset it by hand if an A/B is
-    left behind, otherwise the device stays on the slow path.
+    clean UI frame — ~35k distinct colours, the KitKat wallpaper and
+    status/nav bands in place,
+    ![decoded fb0 frame](fb0-decode-copy-path-2026-10-19.png) — the TEST 30
+    fb0-decode check still works on this path, and that is how the copy
+    fallback itself was verified. Restored `persist.gralloc.fb_commit=1` and
+    reflashed: the property lives in /data, so it survives a system flash —
+    reset it by hand if an A/B is left behind, otherwise the device stays on
+    the slow path.
   - **Panel stays up (idle power collapse).** After ~15 min of a static
     screen the backlight still reads `1638` and the next swipe burst
     presents at `59.9 fps while active` with every release fence
