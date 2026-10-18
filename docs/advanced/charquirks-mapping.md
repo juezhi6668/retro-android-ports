@@ -4,7 +4,10 @@ Reference notes: how a sister port's `CHARQUIRKS.md` (Android 4.2.2 on the
 Xperia 1 II, SD865, kernel 4.19; a private document, not in this
 repository) maps onto maple/KitKat. Read 2026-10-14. Below: what we
 independently converged on (validates our path), what applied to our stall
-at the time, and what is queued for later phases. Current status:
+at the time, and what is queued for later phases. It is a dated snapshot:
+maple has since gone through hardware GL (glrenderd, then the in-process
+[libhyb](software/libhyb.md) on 2026-10-18), so the graphics rows below
+are historical. Current status:
 [maple quirks](../devices/maple/quirks.md); generic lessons:
 [KitKat porting notes](porting-notes/kitkat.md). Back to the
 [advanced index](README.md).

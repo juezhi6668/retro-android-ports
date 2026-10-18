@@ -20,7 +20,7 @@ puts **KitKat 4.4.4** on it — same yoshino/MSM8998 platform as
 | Launcher / UI | Working |
 | Touch | Working (Clearpad, full-range coords, nav bar + gpio keys) |
 | Display | Working, command-mode panel, fb0 stride 4352 B (1088 px) |
-| GPU | **Hardware GL via [glrenderd](../../advanced/software/glrenderd.md)** (Adreno 540) |
+| GPU | **Hardware GL via the glrenderd design built into this tree** (Adreno 540). The glrenderd sources/patches were removed from the repo on 2026-10-18 when maple moved to [libhyb](../../advanced/software/libhyb.md); poplar still builds the old design from its device tree — the removed pieces are in git history, and porting libhyb to poplar is the roadmap item |
 | USB | adb working (configfs gadget) |
 | Lights | Brightness + sleep via `lights.poplar` (`lcd-backlight` node only — maple has since gained dual-node; see quirks) |
 | WiFi / Audio | Not yet — this tree predates maple TEST 36-37 (no supplicant services, no adsp boot); needs forward-port |
@@ -41,5 +41,7 @@ deltas in quirks).
 - [Building KitKat](../../advanced/build/kitkat.md).
 - [Device tree](../../../devices/poplar/kitkat/) (`devices/poplar/kitkat/`)
   and [AOSP patches](../../../patches/kitkat/README.md) (`patches/kitkat/`).
-- Sibling device: [maple](../maple/README.md). Reference: [poplar GPU fixes](../../advanced/poplar-kitkat-gpu-fixes.md),
-  tool: [glrenderd](../../advanced/software/glrenderd.md).
+- Sibling device: [maple](../maple/README.md). Reference: [poplar GPU fixes](../../advanced/poplar-kitkat-gpu-fixes.md)
+  (the glrenderd-era bundle this tree's GPU support came from; maple has
+  since replaced that design with [libhyb](../../advanced/software/libhyb.md),
+  which is also the path we owe poplar).

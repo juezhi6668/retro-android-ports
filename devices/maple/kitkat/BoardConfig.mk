@@ -70,13 +70,20 @@ BOARD_CACHEIMAGE_FILE_SYSTEM_TYPE := ext4
 # TARGET_BOARD_PLATFORM := cooper kept Donut's hardware/msm7k out).
 # KitKat's hardware/qcom/* targets msm8960/8974-era HALs; nothing knows
 # msm8998 + Adreno 540 + 4.4 kernel. Set `msm8998` only when a QCOM HAL
-# path is proven; until then use generic audio/camera/gps + software EGL.
+# path is proven; until then use generic audio/camera/gps. Graphics is NOT
+# one of those generic paths: libhyb brings the real Adreno 540 driver (below).
 TARGET_BOARD_PLATFORM := maple
 TARGET_BOARD_PLATFORM_GPU := qcom-adreno540
 
-# the goldfish gl libs are the guest half of glrenderd (tools/glrenderd), which replays them on
-# the adreno 540 from lineage's chroot. see patches/kitkat/*glrenderd*
-BUILD_EMULATOR_OPENGL := true
+# Graphics: the real Adreno 540 driver (Lineage 22.1 / Android 15 vendor closure) is loaded
+# into every KitKat process by libhyb (devices/maple/kitkat/{hyb,egl,gralloc}); the software
+# fallback (libGLES_android) stays, but the emulation libs and BUILD_EMULATOR_OPENGL are gone
+# with glrenderd. egl.cfg (BOARD_EGL_CFG below) keeps the stock layout; the EGL loader finds
+# libEGL_adreno.so in /system/lib/egl by naming convention. Do NOT set ro.kernel.qemu
+# anywhere: its mere presence switches KitKat's loader to the emulation path and disables
+# hwui (Taimen-KitKat NOTES).
+USE_OPENGL_RENDERER := true
+BOARD_EGL_CFG := vendor/sony/maple/egl.cfg
 
 # kitkat only preopts user builds by default. without it first boot dexopts every jar and apk
 # on the phone, and the boot animation hides that for many minutes

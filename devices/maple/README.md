@@ -19,10 +19,18 @@ Contents:
   (GPT mounts by raw node with pre-created dirs, setenforce 0, configfs
   USB gadget safety nets), `init.maple.usb.rc` + `usbudc.sh` (DWC3 adb
   gadget bringup), `ueventd.maple.rc` (node ownership).
-- `glrenderd.sh`, `clearpad.idc`, `gpio-keys.kl`, overlay (emulated
+- `clearpad.idc`, `gpio-keys.kl`, overlay (emulated
   storage list, nav bar, density) — see `docs/devices/maple/quirks.md` for
-  what works (boot, touch, display, adb, hardware GL via glrenderd) and
+  what works (boot, touch, display, adb, hardware GL via libhyb) and
   what's still open (audio/WiFi/RIL/camera).
+- Graphics stack (glrenderd-free since 2026-10-18): `hyb/` (ELF loader +
+  hooks, root `/system/a15`), `egl/` (KitKat-named EGL/GLES shims +
+  generated stubs), `gralloc/` (KitKat gralloc/fb HAL on the QTI gralloc1,
+  the single fb0 flipper), `fbpresentd/` (64-bit MDSS atomic-commit
+  presenter), `rtc-restore/` (clock restore without `/dev/alarm`). The
+  staged closure and the built presenter live outside this tree
+  (`vendor/sony/maple-hyb`, `vendor/sony/maple-bin`); tooling in
+  `tools/libhyb/`, writeup in `docs/advanced/software/libhyb.md`.
 
 Reference (not in git, same policy as cooper blobs): Sony
 `android_device_sony_maple` (`ten` branch) + `yoshino-common`

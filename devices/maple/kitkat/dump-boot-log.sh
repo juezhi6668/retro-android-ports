@@ -35,7 +35,7 @@ while true; do
     echo "--- zygote ---" >> /data/misc/watch-wchan.txt
     for d in /proc/[0-9]*; do
         c=$(cat $d/comm 2>/dev/null)
-        case "$c" in zygote|system_server|dexopt|surfaceflinger|servicemanager|bootanimation|glrenderd)
+        case "$c" in zygote|system_server|dexopt|surfaceflinger|servicemanager|bootanimation|fbpresentd)
             echo "== $d $c ==" >> /data/misc/watch-wchan.txt
             for t in $d/task/*; do
                 echo "${t##*/} $(cat $t/comm 2>/dev/null) $(cat $t/wchan 2>/dev/null)" >> /data/misc/watch-wchan.txt

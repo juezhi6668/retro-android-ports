@@ -1,8 +1,13 @@
 # Poplar KitKat GPU fixes — `glrenderd` reference (maple / poplar)
 
 Sibling-port reference for the yoshino MSM8998 `glrenderd` work — developed on
-`poplar`, adopted by `maple`. See [glrenderd](software/glrenderd.md) (canonical
-writeup), [KitKat porting notes](porting-notes/kitkat.md), [maple quirks](../devices/maple/quirks.md),
+`poplar`, adopted by `maple`. **Historical for maple**: on 2026-10-18 the
+glrenderd sources, patches and tools were removed from this repo
+([libhyb](software/libhyb.md) replaced them, see the
+[porting notes](porting-notes/kitkat.md#libhyb-lessons-maple-2026-10-18-built-on-device-verification-pending));
+poplar still builds that design from its own device tree, and these fixes
+are what a poplar-to-libhyb port must carry over (or consciously drop).
+Also: [maple quirks](../devices/maple/quirks.md),
 [poplar quirks](../devices/poplar/quirks.md).
 
 What makes hardware GL work under KitKat 4.4.4 on the yoshino MSM8998 devices —
@@ -42,12 +47,15 @@ the prebuilt encoders then `memcpy` into it. Mark the stream dead and drop; neve
 - `persist.glr.replytimeout` (default 20 s) = how long a guest waits before declaring the
   daemon dead.
 
-## Status — not in `patches/kitkat/` yet
+## Status — glrenderd-era; the patch set was retired 2026-10-18
 
-Only the earlier scaffolding is there (`device-generic-goldfish-glrenderd`,
-`frameworks-native-egl-glrenderd`, `sdk-glrenderd`, `system-core-glrenderd-fs-config`).
-The fixes below exist only in the poplar working tree, so **the GPU behaviour cannot be
-reproduced from the repo until they are formalised**:
+The fixes below existed only in the poplar working tree (the four
+scaffolding patches were deleted from `patches/kitkat/` together with the
+rest of the glrenderd design — all in git history). **The glrenderd GPU
+behaviour cannot be reproduced from the repo as it stands**; poplar's
+device tree plus git history hold the old design, or port libhyb
+([checklist](software/libhyb.md#porting-it-to-another-device)) and these
+fixes become moot:
 
 | fix | file |
 | --- | --- |
@@ -55,8 +63,9 @@ reproduced from the repo until they are formalised**:
 | dead stream, `MSG_NOSIGNAL` | `device/generic/goldfish/opengl/shared/OpenglCodecCommon/SocketStream.cpp` |
 | reconnect in place | `device/generic/goldfish/opengl/system/OpenglSystemCommon/RenderdStream.cpp` (`.h`) |
 | bounded `glGetError` | `frameworks/native/libs/gui/GLConsumer.cpp` |
-| dispatch self-thaw | `frameworks/base/services/input/InputDispatcher.cpp` (`.h`) |
-| socket caps | `tools/glrenderd/src/glrenderd.cpp` (`raise_socket_limits`) |
+| dispatch self-thaw | `frameworks/base/services/input/InputDispatcher.cpp` (`.h`) — **still in the repo**: `patches/kitkat/frameworks-base-input-dispatch-freeze-thaw.patch` |
+| socket caps | `tools/glrenderd/src/glrenderd.cpp` (`raise_socket_limits`) — deleted 2026-10-18, git history |
 
-The first two extend `device-generic-goldfish-glrenderd.patch`; the GLConsumer and
-InputDispatcher ones are new `frameworks` patches.
+The first two extended `device-generic-goldfish-glrenderd.patch`; the
+GLConsumer one bounded the socket round-trip (moot without the socket);
+the InputDispatcher fix is transport-independent and still applied.

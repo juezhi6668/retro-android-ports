@@ -1,7 +1,7 @@
 # maple quirks (Sony Xperia XZ Premium G8141/G8142)
 
 Everything needed to port to maple: hardware snapshot, flash layout,
-kernel, blocker list, and the full TEST 1–37 bringup log with verified
+kernel, blocker list, and the full TEST 1–49 bringup log with verified
 fixes. Status, releases and links live on the
 [device main page](README.md); the generic KitKat playbook is the
 [KitKat porting notes](../../advanced/porting-notes/kitkat.md), with the
@@ -11,7 +11,10 @@ fixes. Status, releases and links live on the
 Current state: **BOOTED 2026-10-15** — full KitKat userspace on the 4.4 kernel:
 `sys.boot_completed=1`, 75 binder services, Launcher compositing at
 1080x1920, working touch, USB adb (`18d1:4ee7`). **Hardware-accelerated
-GL/GLES verified 2026-10-15** (Adreno 540 via glrenderd, GLES 3.2). The
+GL/GLES verified 2026-10-15** (Adreno 540 via glrenderd, GLES 3.2); on
+**2026-10-18 the graphics stack was replaced by
+[libhyb](../../advanced/software/libhyb.md)** (driver in-process,
+`fbpresentd` atomic commit — built, flash/verify pending, TEST 49). The
 tree in [`devices/maple/kitkat/`](../../../devices/maple/kitkat/) is a
 commented, boot-verified device tree. Remaining gaps (no
 cellular/audio/camera/WiFi yet — same documented-limitations posture as
@@ -1574,3 +1577,83 @@ Next actions (checkboxes for the log):
     `/system/usr/keychars/*.kcm.bin` are mode 0644, logcat shows 0
     `Can't find any keycharmaps` warnings and 0 `has died` lines on the
     fresh boot, and Settings opens without crashing.
+
+## Bringup log: libhyb, the in-process Adreno driver (2026-10-18)
+
+- **TEST 49 (owner: "glrenderd must become obsolete" — port
+  [DoomGuy41/Taimen-KitKat](https://github.com/DoomGuy41/Taimen-KitKat);
+  2026-10-18):** the graphics stack is replaced. `libhyb`
+  (`devices/maple/kitkat/hyb/`) loads the LineageOS 22.1 (Android 15)
+  closure — Adreno 540 driver, QTI gralloc1, dependencies — **directly into
+  every KitKat process**; `egl/` shims keep the KitKat library names and
+  forward (GLES through generated per-function stubs); `gralloc.maple`
+  provides gralloc 0.2 + the fb HAL on the QTI gralloc1 (real ION buffers
+  with the QTI handle, cloned across processes); `fbpresentd/` (64-bit,
+  NDK-built) presents through an **MDSS atomic commit** on DMA0 with
+  copy + `FBIOPUT_VSCREENINFO` as the fallback. The chroot, the emugl
+  transport, `tools/glrenderd/`, the four `*glrenderd*` patches, the
+  `patches/kitkat/files/` overlay, `BUILD_EMULATOR_OPENGL`, the goldfish
+  guest libs and the `GLConsumer` bound are **gone**; **TEST 30–41 above
+  describe the superseded glrenderd design** — kept as history, their
+  tooling/patches are deleted. Full writeup:
+  [libhyb](../../advanced/software/libhyb.md).
+  - **Build evidence (server, 2026-10-18):** closure staged by
+    `tools/libhyb/stage.py` from a Lineage 22.1 zip — 19 libs
+    (`vendor/lib/egl`: driver + `eglSubDriverAndroid` + `libq3dtools`;
+    `vendor/lib`: `libc++`, `libgsl`, `libllvm-glnext`,
+    `libgrallocutils`, `libqdMetaData`, …; `system/lib`: `libsync`,
+    `libvndksupport`) + a530/a540 firmware, with `libc/libm/libdl/liblog/
+    libcutils/libz/ld-android/libdl_android` resolved to **KitKat's own**
+    bionic. `fbpresentd` built aarch64 static (NDK r21e, 4.0 MB).
+    Image contents verified: `/system/lib/libhyb.so`,
+    `/system/lib/hw/gralloc.maple.so`, `/system/lib/egl/{egl.cfg,
+    libEGL_adreno.so, libGLESv1_CM_adreno.so, libGLESv2_adreno.so,
+    libGLES_android.so}`, `/system/bin/{fbpresentd,hybtest,rtc-restore}`,
+    `/system/a15/{vendor,system}/...`.
+  - **KitKat's EGL loader does not read `egl.cfg`.** `Loader.cpp` scans
+    `/vendor/lib/egl` then `/system/lib/egl` with readdir for
+    `libEGL_*.so` and takes **the first hit** (it explicitly skips only
+    `libGLES_android.so`); `egl.cfg` is inert at runtime on this release.
+    With the emulation libs (`libEGL_emulation.so`, …) still present the
+    choice of driver was readdir-order luck — hence the emulation libs are
+    not built any more, and a stale copy in the out tree must be deleted.
+    (Verified against the server tree's `Loader.cpp`, lines 265–350.)
+  - **Removing files from `PRODUCT_*` does not remove them from the out
+    tree.** The first libhyb image silently shipped the whole 25 MB
+    `system/glr/` chroot, `libEGL_emulation.so` + friends,
+    `libOpenglSystemCommon.so`, `lib*_enc.so` and `/sbin/glrenderd.sh`:
+    `mkuserimg.sh` packs whatever `out/target/product/maple/system` holds,
+    and dropped `PRODUCT_COPY_FILES`/`PRODUCT_PACKAGES` entries leave the
+    old files (owned by root from the container build) behind. Fix: delete
+    the stale paths from the out tree and rebuild the images
+    (`cleanup-rebuild.sh` on the server). Any "why is this file still in
+    my image?" ends here.
+  - **`LOGI` is not a KitKat macro.** `cutils/log.h` includes
+    `log/log.h`, which defines `ALOGI`/`ALOGE` — the first `rtc-restore`
+    build failed at link with `undefined reference to 'LOGI'` (the
+    unexpanded name became an implicit function call).
+  - **`__tls_get_addr` risk closed by inspection:** the closure never
+    calls it (0 call sites via `llvm-objdump` over `libc++`, `libutils`,
+    `libhidlbase`, `libgsl`, `libllvm-glnext`, `libgrallocutils`,
+    `libqdMetaData`); `hooks.c` provides an aborting stub as a tripwire, so
+    if the driver ever needs TLS it fails loudly instead of corrupting.
+  - **32-bit `MSMFB_ATOMIC_COMMIT` crashes the kernel** (from the Taimen
+    port; `verify-me` on maple): that is why `fbpresentd` is a 64-bit
+    out-of-tree binary. The copy fallback still works from 32-bit
+    (`FBIOPUT_VSCREENINFO` + yoffset, TEST 30).
+  - **hwui is enabled now** (`USE_OPENGL_RENDERER := true` in
+    BoardConfig, Taimen parity): the glrenderd-era builds never set it, so
+    `libhwui` was not built at all (the UI thread drew in software and only
+    SurfaceFlinger composited on the GPU). With a real ES2/ES3 driver in
+    the process the accelerated UI path is the point of the port, and the
+    `frameworks-base-hwui-gles2-cap.patch` keeps hwui on its tested ES2
+    behaviour. First-flash check: `dumpsys gfxinfo` shows real draw times
+    and `libhwui.so` is in `/system/lib`. Taimen also sets
+    `TARGET_DISABLE_TRIPLE_BUFFERING := true` (two app buffers instead of
+    three) — a candidate tuning here, not adopted without measurement.
+  - **Not yet verified on maple hardware:** no device was attached while
+    this was built. On the first flash check, in order: `hybtest` (ES3
+    context + pixel readback), `dmesg | grep -i hyb` (loader), the
+    `gralloc.maple` fb0 line (`atomic commit 1`), `dumpsys
+    SurfaceFlinger` (Adreno 540 strings), panel stays up (idle power
+    collapse), `persist.gralloc.fb_commit=0` A/B, fps.

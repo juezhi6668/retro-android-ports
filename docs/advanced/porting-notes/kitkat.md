@@ -2,13 +2,15 @@
 
 Playbook for bringing AOSP KitKat (`android-4.4.4_r2`, KTU84Q, API 19) up
 on post-2014 hardware. Started for the Sony Xperia XZ Premium (`maple`,
-2017, MSM8998); device quirks (incl. the TEST 1–37 bringup log) live in
+2017, MSM8998); device quirks (incl. the TEST 1–49 bringup log) live in
 the [maple quirks](../../devices/maple/quirks.md), the step-by-step build
 in [build/kitkat.md](../build/kitkat.md). The [Donut playbook](donut.md)
 is the method reference — this doc is the KitKat delta. Back to the
 [advanced index](../README.md).
 **Everything below the "Field lessons" header is boot-verified on maple
-(Oct 2026); treat the sections above it as the original checklist.**
+(Oct 2026) except the [libhyb section](#libhyb-lessons-maple-2026-10-18-built-on-device-verification-pending),
+which was built 2026-10-18 and awaits its first flash; treat the sections
+above it as the original checklist.**
 
 ## Field lessons (maple, verified on-device)
 
@@ -43,9 +45,15 @@ is the method reference — this doc is the KitKat delta. Back to the
 - **`write /dev/kmsg` from init is unobservable** on kernels without
   matching policy/context (no error). Diagnose with file outputs
   (`dmesg > /data/...`, per-pid `/proc` snapshots) pulled via TWRP, not
-  kmsg markers. Related: the 4.4 kernel has no `CONFIG_LOGGER`, so
-  logcat is blind and every ALOG failure is invisible — including the
-  errno fallout that once sent us chasing a phantom EBADF.
+  kmsg markers. Related: the 4.4 kernel has no `CONFIG_LOGGER`, so there
+  is no `/dev/log` and stock logcat is blind. Patch liblog to fall back
+  to `/dev/kmsg` (`patches/kitkat/system-core-liblog-kmsg-*.patch`) and
+  every `ALOG*` becomes a `<level>Tag[pid]: msg` line in `dmesg` — it
+  also means the *newer* 32-bit libraries loaded by
+  [libhyb](../../advanced/software/libhyb.md) log through the old
+  liblog, so their messages land in `dmesg` too. Watch the errno fallout
+  that once sent us chasing a phantom EBADF (journal-file helpers lie by
+  omission).
 - **First-boot services to disable** (cooper pattern — all TEMPORARY,
   re-enable with the real fix): `vold` if it parks in decrypt-wait on
   foreign userdata (re-enable: ours runs fine once userdata is ext4);
@@ -67,34 +75,57 @@ is the method reference — this doc is the KitKat delta. Back to the
   "Junk in the top half of 64-bit unions breaks lookups" — assign every
   field, leave no padding uninitialised.
 - **EGL needs a driver it isn't allowed to skip**: KitKat's loader skips
-  `libGLES_android.so`, aborting surfaceflinger in `eglGetDisplay` when
-  no HW driver exists. Our `frameworks-native-egl-glrenderd.patch`
-  routes EGL to the emulation libs when glrenderd answers, libagl
-  otherwise. Know the limits of the fallback: **libagl is ES1-only** —
-  any ES2 client (live wallpaper, hwui apps) finds no matching config
-  and dies (`eglConfig not initialized`). Bring a real ES2 path (our
-  glrenderd/Adreno route does — ES 3.2) and keep a non-GL fallback for
-  when it's absent (the wallpaper canvas path when EGL init throws).
-- **Two flippers wedge mdss**: exactly one thing may
-  `FBIOPAN_DISPLAY`-flip fb0. The trap is "mixed mode": start the second
-  flipper (glrenderd) *after* surfaceflinger has already run its EGL
-  emulation probe and SF is latched to the software renderer — the
-  decision is cached per process, so SF pans fb0 AND glrenderd pans →
-  desynced `yoffset`, `mdp ctl start failed` (EBUSY), panel frozen on the
-  splash. Fix is ordering, not arbitration: start glrenderd in
-  `post-fs-data`, before SF's first probe, so SF finds the socket and
-  takes the emulation path (posts via `rcFBPost`, never `FBIOPAN`s) and
-  glrenderd is the single flipper.
-- **Size the renderer-probe window to real startup latency**: the
-  egl + gralloc "is glrenderd there?" probes wait for the abstract
-  socket. glrenderd's cold-boot startup (adreno init + firmware load) is
-  slow; a 5s window missed it, SF fell back to software and never
-  reconsiders for the process lifetime. Wait generously (we use 300 ×
-  100 ms). Corollary: keep the daemon's own startup fast — a
-  "wait for the fb HAL to double-buffer, then do it ourselves" made bind
-  take 10s instead of 0.2s; nobody opens the fb HAL in glrenderd mode,
-  so just double `yres_virtual` immediately (`FBIOPUT_VSCREENINFO`) or
-  the daemon samples `flips=0` and memcpys without ever panning.
+  `libGLES_android.so` ("always skip the software renderer") and aborts
+  surfaceflinger in `eglGetDisplay` when no other driver exists. Know the
+  limits of the fallback: **libagl is ES1-only** — any ES2 client (live
+  wallpaper, hwui apps) finds no matching config and dies (`eglConfig not
+  initialized`). Bring a real ES2 path and keep a non-GL fallback for when
+  it's absent (the wallpaper canvas path when EGL init throws, plus the
+  Atlas backport below).
+- **On KitKat the EGL driver is chosen by readdir, not by `egl.cfg`**:
+  `Loader::MatchFile::find()` scans `/vendor/lib/egl` then
+  `/system/lib/egl` for `libEGL_*.so` and takes **the first hit**
+  (verified in the server tree's `Loader.cpp`, ~lines 265–350); `egl.cfg`
+  is inert at runtime on this release (it only documents the layout).
+  That makes a *leftover* `libEGL_emulation.so` an unpredictable winner
+  and the choice one-shot: SF latches it per process, so a bad pick means
+  software GL until SF restarts. Make the probe deterministic (build
+  exactly one hardware `libEGL_*.so`, delete stale emulator libs from the
+  out tree) instead of trying to win a race. **Never set
+  `ro.kernel.qemu`** — its presence short-circuits the same loader to
+  `libGLES_android.so` and disables hwui.
+- **A retired transport leaves workarounds behind**: the in-process
+  [libhyb](../../advanced/software/libhyb.md) design (maple 2026-10-18)
+  deleted the glrenderd socket, and with it the bounded-reply/reconnect/
+  socket-buffer machinery, the readback presenter and the EGL loader
+  patch — GL calls are plain function calls now. When you change a
+  transport, sweep the workarounds it justified (they will still "work",
+  which is how they survive): grep the patch set and init scripts for the
+  old component's name before calling the migration done.
+- **Two flippers wedge mdss**: exactly one thing may drive fb0's offset.
+  The trap is "mixed mode": a second flipper competing with surfaceflinger
+  after SF has already picked its renderer (the choice is cached per
+  process) — both flip, `yoffset` goes out of sync and mdss logs
+  `mdp ctl start failed` (EBUSY) with the panel frozen on the splash. Fix
+  is ordering, not arbitration: the component that owns the fb HAL must be
+  the only flipper. In the libhyb design `gralloc.maple` owns the fb HAL
+  (SurfaceFlinger posts through it and never `FBIOPAN`s) and `fbpresentd`
+  is started in `post-fs-data`, before SF's first post; the old
+  glrenderd design instead had to start its daemon before SF's first EGL
+  probe.
+- **The glrenderd-era socket lessons (this bullet and the
+  readback/socket cluster further down) are retired on maple but still
+  live on poplar and documented here as the template for a
+  socket-transport GL bridge**: size every "is the renderer there?"
+  probe to real startup latency. glrenderd's cold-boot startup (adreno
+  init + firmware load) is slow; a 5s window missed it, SF fell back to
+  software and never reconsiders for the process lifetime. Wait
+  generously (we used 300 × 100 ms). Corollary: keep the daemon's own
+  startup fast — a "wait for the fb HAL to double-buffer, then do it
+  ourselves" made bind take 10s instead of 0.2s; nobody opens the fb HAL
+  in glrenderd mode, so just double `yres_virtual` immediately
+  (`FBIOPUT_VSCREENINFO`) or the daemon samples `flips=0` and memcpys
+  without ever panning.
 - **Flip with the ioctl the working path uses, not the "obvious" one**: on
   maple `FBIOPAN_DISPLAY` returns success but `mdss_mdp_overlay_pan_display`
   logs `unable to allocate base pipe` and never moves `yoffset` — the panel
@@ -255,14 +286,17 @@ is the method reference — this doc is the KitKat delta. Back to the
   panel takes effect, the other is inert. Verify brightness with
   `settings put system screen_brightness N` + reading both nodes while the
   screen is ON (`mScreenOn=true`; a sleeping screen reads 0 by design).
-- **Renderer rebuilds are safe when the protocol files are untouched**:
-  the "never rebuild glrenderd alone" rule is about `*_enc`/`*_dec` codec
+- **Renderer rebuilds are safe when the protocol files are untouched**
+  (glrenderd era, kept for poplar/leftover references): the "never
+  rebuild glrenderd alone" rule is about `*_enc`/`*_dec` codec
   tables generated from the `.in` files — if those are unchanged, the
   regenerated tables are identical and the deployed guest `*_enc.so`
   matches (maple TEST 33 rebuilt glrenderd from the same tree; panel came
   up correct). Keep the known-good binary as the backup either way.
 - **The post readback is the per-frame cost floor on a framebuffer-backed
-  renderer** (maple TEST 35): with the guest composing on the host GPU and
+  renderer** (maple TEST 35; the design libhyb replaced — retired on
+  maple, still the shape of poplar's glrenderd): with the guest
+  composing on the host GPU and
   the panel fed from fb0, every presented frame pays a synchronous
   `glReadPixels` (~9–10 ms at 1080p) plus a copy into the presenter.
   Bounce the readback straight into the presenter's staging slot (poplar's
@@ -350,7 +384,9 @@ is the method reference — this doc is the KitKat delta. Back to the
   `hwchroot` assembles glrenderd's chroot under `/dev/.glr` and binds the
   real entries onto it; nothing inside `<root>` is ever written.
 - **Staged binaries silently revert to whatever the staging dir holds**
-  (maple TEST 41): a rebuilt daemon was live-pushed to the device but the
+  (maple TEST 41; still the rule for `maple-hyb/` + `maple-bin/`, see
+  [libhyb](../../advanced/software/libhyb.md)): a rebuilt daemon was
+  live-pushed to the device but the
   staging dir was never refreshed, so the next system image shipped the old
   binary beside the new guest libs — a cross-build protocol mismatch that
   crashed the daemon ~3x in 5 min (FORTIFY destroyed-mutex, SIGSEGV in
@@ -367,12 +403,13 @@ is the method reference — this doc is the KitKat delta. Back to the
   triggers (4.4 init has no state notifications), so a component that must
   react to another service's restart needs an in-band marker file.
 - **Init triggers do not wait for the services they start** (maple
-  TEST 41): `start glrenderd` in post-fs-data returns once the process is
-  forked, and init proceeds to the next trigger (`on boot` →
+  TEST 41): `start fbpresentd` (or any service) in post-fs-data returns
+  once the process is forked, and init proceeds to the next trigger
+  (`on boot` →
   `class_start core`) immediately — surfaceflinger's process appeared
-  milliseconds behind glrenderd's at maple's boot (caught by a probe that
-  wrongly assumed "SF running" meant "the daemon restarted"). Never infer
-  service states from process presence during early triggers.
+  milliseconds behind the started service's at maple's boot (caught by a
+  probe that wrongly assumed "SF running" meant "the daemon restarted").
+  Never infer service states from process presence during early triggers.
 - **Cross-era property writes exec the host's `setprop`** (maple TEST 41):
   a helper built static with a modern NDK still runs on the old release,
   but its property client expects the post-8.x `/dev/__properties__`
@@ -380,6 +417,62 @@ is the method reference — this doc is the KitKat delta. Back to the
   host's `/system/bin/setprop` for `ctl.restart` instead (verified on
   device). Same trick applies to any modern-side helper that must poke an
   ancient release's init.
+
+## libhyb lessons (maple, 2026-10-18; built, on-device verification pending)
+
+The in-process replacement for glrenderd — Adreno 540 driver + QTI
+gralloc1 from a Lineage 22.1 closure loaded into KitKat processes. Full
+write-up: [libhyb](../software/libhyb.md); adoption notes (which Taimen
+patches were taken, skipped or queued):
+[taimen-kitkat-mapping.md](../taimen-kitkat-mapping.md); device log:
+[maple quirks](../../devices/maple/quirks.md) TEST 49. The reusable
+lessons:
+
+- **A newer 32-bit vendor driver can be called in-process on an old
+  Android.** The C-level EGL/GLES ABI is stable across the gap; what
+  needs bridging is (a) bionic symbols the newer libraries import and
+  (b) buffer formats. Ship a loader + a hooks table and the driver's real
+  entry points are plain function calls — no socket, no readback, no
+  chroot, and the "one flipper" problem collapses to "the gralloc HAL
+  owns fb0".
+- **Decide the old/new boundary name by name.** The loader resolves a
+  fixed host list (`libc`, `libm`, `libdl`, `liblog`, `libcutils`,
+  `libz`) to the old system's own libraries and stages everything else
+  from the closure. That is what keeps one copy of the allocator,
+  signal handling and logging in the process — and it means the *new*
+  libraries' `ALOG*` output rides the old liblog, so an old-side logging
+  fix (the `/dev/kmsg` fallback above) lights up the driver's logs too.
+- **Discover the closure with `readelf -d` from the real roots, then add
+  a second pass for runtime `dlopen`s** (`eglSubDriverAndroid`,
+  `libq3dtools`, the gralloc module): the linker graph alone misses what
+  a HAL loads by name. Keep staging deterministic (the tools do it) and
+  print what was staged and what was rejected, or the next person
+  re-does the walk by hand.
+- **Re-derive kernel-facing constants from the target's own kernel
+  headers**, never from a sibling port's copy: the atomic-commit pipe
+  encoding (`pipe_ndx`) and the `msm_mdp*.h` struct layouts came from
+  this kernel's `include/uapi/linux/` and were then vendored into the
+  device tree so the userspace build and the kernel can't drift.
+- **A 64-bit-only kernel path needs an out-of-tree binary** — KitKat's
+  build system makes 32-bit binaries only, and the 32-bit compat path of
+  at least one MDSS ioctl is fatal (Taimen's port; verify-me on maple).
+  Build the presenter with the NDK (`-static`, aarch64) and stage it
+  under `vendor/sony/<device>-bin/` **outside the device-tree rsync
+  path**, so `sync-device-tree.sh --delete` cannot eat it.
+- **`LOGI` is not a KitKat macro.** Device-tree code fails at *link*
+  with `undefined reference to 'LOGI'` because the unexpanded name became
+  an implicit function call; use `ALOGI`/`ALOGE`
+  (`cutils/log.h` → `log/log.h`), as `hardware/` does.
+- **Removing files from `PRODUCT_*` does not remove them from the out
+  tree.** `mkuserimg.sh` packs whatever `out/target/product/<device>/system`
+  holds; a dropped `PRODUCT_COPY_FILES`/`PRODUCT_PACKAGES` entry leaves
+  the old file (root-owned, from a container build) in the image. After
+  retiring the glrenderd design the first libhyb image still shipped the
+  whole 25 MB `/system/glr/` chroot, the emulation GL libraries and
+  `/sbin/glrenderd.sh`. Delete the stale paths from the out tree (or the
+  whole `system/` dir) and rebuild the images whenever a component is
+  removed — and never trust "I deleted the patch" for what is in the
+  image (maple TEST 49).
 
 ## Container gotchas (verified)
 
@@ -457,7 +550,8 @@ is the method reference — this doc is the KitKat delta. Back to the
   keyguard window's `userActivityTimeout` (10 s), and **touch input does not
   wake the screen** — a test harness must check `mScreenOn` and wake via a
   power/menu key, or it will spend an hour "testing" a dark display. Also:
-  `screencap` can return a constant image on the glrenderd stack (use fb0
+  `screencap` can return a constant image on a
+  framebuffer-presented stack (use fb0
   dumps), and `input keyevent 26` is a toggle, not "turn on".
 
 - **SERVREG_LOC (QMI 0x40) can be served from a 32-bit userspace over the

@@ -21,8 +21,8 @@ put **KitKat 4.4.4** (a 32-bit, 2013 userspace) and, more recently,
 | Boot | Boots to launcher (`sys.boot_completed=1`, 75 binder services), all partitions mounted |
 | Launcher / UI | Working; sustained animations ~26–35 fps |
 | Touch | Working (Clearpad, full-range coords, nav bar + gpio keys) |
-| Display | Working, 1080×1920 through glrenderd as the single fb0 flipper |
-| GPU | **Hardware GL/GLES 3.2 on the Adreno 540** via [glrenderd](../../advanced/software/glrenderd.md) |
+| Display | Working, 1080×1920; `gralloc.maple` is the single fb0 flipper (`fbpresentd` atomic commit, copy + `FBIOPUT_VSCREENINFO` fallback) |
+| GPU | **Hardware GL/GLES 3.2 on the Adreno 540** via [libhyb](../../advanced/software/libhyb.md) — the driver runs in-process (this replaced the glrenderd chroot; built 2026-10-18, flash/verify pending) |
 | USB | adb working (configfs gadget, `18d1:4ee7`) |
 | Lights | Brightness + sleep via the ported lights HAL (both backlight nodes) |
 | Storage | Emulated internal storage working (`/sdcard`); microSD still untested |
@@ -59,7 +59,7 @@ live under [GitHub Releases](https://github.com/pukikiko/retro-android-ports/rel
 ## Documentation and links
 
 - [**Device quirks**](quirks.md) — hardware snapshot, flash layout, the
-  full TEST 1–48 bringup log, blockers and verified fixes.
+  full TEST 1–49 bringup log, blockers and verified fixes.
 - [KitKat 4.4.4 porting notes](../../advanced/porting-notes/kitkat.md) —
   generic playbook this port produced.
 - [Donut 1.6 porting notes](../../advanced/porting-notes/donut.md) —
@@ -74,5 +74,6 @@ live under [GitHub Releases](https://github.com/pukikiko/retro-android-ports/rel
 - [Device tree (Donut)](../../../devices/maple/donut/)
   (`devices/maple/donut/`) and [patches](../../../patches/donut/README.md)
   (`patches/donut/`).
-- Tools used here: [glrenderd](../../advanced/software/glrenderd.md),
-  [vtouch](../../advanced/software/vtouch.md).
+- Tools used here: [libhyb](../../advanced/software/libhyb.md) (KitKat:
+  Adreno 540 driver in-process + `fbpresentd`; staging tools in
+  `tools/libhyb/`), [vtouch](../../advanced/software/vtouch.md).

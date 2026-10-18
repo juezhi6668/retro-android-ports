@@ -2,7 +2,7 @@
 # plus maple mounts/gadget via stock `import /init.${ro.hardware}.rc`
 # (ro.hardware=maple from androidboot.hardware). Single import only: a
 # duplicate `import /init.maple.rc` here used to spam kmsg with ignored
-# duplicate service definitions (bootlog/autowinch/sdcard/glrenderd).
+# duplicate service definitions (bootlog/autowinch/sdcard).
 # Shipped to ramdisk root (TARGET_PROVIDES_INIT_RC=true).
 
 # Copyright (C) 2012 The Android Open Source Project

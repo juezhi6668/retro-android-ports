@@ -1,0 +1,18 @@
+ported from Taimen-KitKat (DoomGuy41); cap hwui's reported GL version at 2.0 (KitKat hwui is only tested with ES2 behaviour)
+
+diff --git a/libs/hwui/Extensions.cpp b/libs/hwui/Extensions.cpp
+index 84e7e650..94a5d701 100644
+--- a/libs/hwui/Extensions.cpp
++++ b/libs/hwui/Extensions.cpp
+@@ -91,6 +91,11 @@ Extensions::Extensions(): Singleton<Extensions>() {
+         mVersionMajor = 2;
+         mVersionMinor = 0;
+     }
++    // maple: cap at ES 2.0 (added when GL went through the GLES2-only emulator encoder; kept)
++    if (mVersionMajor > 2) {
++        mVersionMajor = 2;
++        mVersionMinor = 0;
++    }
+ }
+ 
+ Extensions::~Extensions() {

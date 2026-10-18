@@ -7,7 +7,9 @@ and [Building KitKat](../../advanced/build/kitkat.md).
 Status: **BOOTED, daily-drivable (Oct 2026)** — full KitKat userspace on the Sony 4.4
 kernel: `sys.boot_completed=1`, launcher + nav bar at 1080x1920, touch, USB adb, and
 hardware GL on the Adreno 540 via `glrenderd`
-([poplar GPU fixes](../../advanced/poplar-kitkat-gpu-fixes.md)). Open: no
+([poplar GPU fixes](../../advanced/poplar-kitkat-gpu-fixes.md)) — the design maple
+retired on 2026-10-18 for [libhyb](../../advanced/software/libhyb.md); poplar's copy of
+the tooling/patches is in git history. Open: no
 cellular/audio/camera/GPS/WiFi/BT, and the renderer still stalls under sustained load.
 Donut/cooper method reference: [Donut porting notes](../../advanced/porting-notes/donut.md);
 sibling device: [maple quirks](../maple/quirks.md).

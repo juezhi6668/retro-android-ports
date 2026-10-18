@@ -15,7 +15,7 @@ Where it goes:
 
 - Generic lesson, reusable across devices of that release: `docs/advanced/porting-notes/<release>.md` (Donut: `donut.md`, KitKat: `kitkat.md`). A new release gets a new file, registered in `docs/advanced/README.md`.
 - Build recipe (source fetch, patch order, packaging, flashing), per release: `docs/advanced/build/<release>.md`. Build-host/container recipe change: `docs/advanced/build-server.md` or `containers/<release>/`.
-- Project-made software/driver write-up: `docs/advanced/software/<tool>.md` (vtouch, glrenderd, mkbootimg-cooper). New tool ⇒ new page linked from `docs/advanced/README.md`.
+- Project-made software/driver write-up: `docs/advanced/software/<tool>.md` (vtouch, libhyb, mkbootimg-cooper). New tool ⇒ new page linked from `docs/advanced/README.md`.
 - Hardware-specific fact, address, partition layout, verified fix, open gap: `docs/devices/<codename>/quirks.md`.
 - Behavior/status change (new boot state, working/broken feature): the device main page `docs/devices/<codename>/README.md`, the README Ports table, and the Roadmap in `README.md`.
 - Patch-set change: `patches/<release>/README.md` alongside the diff under `patches/<release>/` (+ `files/` overlays).

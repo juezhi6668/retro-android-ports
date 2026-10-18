@@ -29,7 +29,11 @@ Contents:
 - `displaytune.sh` — one-shot display fixups at boot, replacing the old keepawake
   workaround that made "screen off" come straight back on.
 - `glrenderd.sh`, `clearpad.idc`, `gpio-keys.kl`, `autowinch.sh`, `dump-boot-log.sh`,
-  overlay (emulated storage list, nav bar, density).
+  overlay (emulated storage list, nav bar, density). **The glrenderd tooling and
+  patches were removed from the repo on 2026-10-18** (maple moved to libhyb,
+  `docs/advanced/software/libhyb.md`) — poplar still builds this design; the
+  deleted pieces are in git history, and porting libhyb here is the queued work
+  (`docs/devices/poplar/README.md`).
 
 Reference (not in git, same policy as cooper blobs): Sony
 `android_device_sony_poplar` (`ten` branch) + `yoshino-common`

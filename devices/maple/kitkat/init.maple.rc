@@ -135,7 +135,8 @@ on init
 on post-fs-data
     mkdir /data/media 0770 media_rw media_rw
 
-    # the kernel resolves this from the requester's root, glrenderd's chroot has the a540 firmware there
+    # the kernel resolves this from the requester's root; the a540 firmware is staged at
+    # /system/vendor/firmware by full_maple.mk (same place as the modem/adsp blobs)
     write /sys/module/firmware_class/parameters/path /vendor/firmware
     # Boot and hold the modem (modem-hold.sh): opening /dev/subsys_modem
     # runs the PIL load from /vendor/firmware (mba.mbn + modem.mdt +
@@ -154,16 +155,18 @@ on post-fs-data
     # adsp-boot.sh waits (bounded, 20 s) for the modem when the locator is
     # on, then writes boot_adsp regardless.
     start adsp_boot
-    # glrenderd owns the panel (single flipper): surfaceflinger in glrenderd mode posts
-    # via rcFBPost and never FBIOPANs itself, so only this daemon pans fb0. it must be up
-    # before surfaceflinger's first egl/gralloc probe (both latch hw-vs-software once per
-    # process, with a 30s wait), hence here in post-fs-data, not on boot. glrenderd doubles
-    # fb0's yres_virtual itself if the fb HAL hasn't yet, so the old flips=0 startup race
-    # and the EBUSY wedge from two racing flippers are both gone (charquirks single-flipper
-    # design; maple TEST 30). disable only for software-fallback experiments
-    # (`stop glrenderd` live needs a surfaceflinger restart to take effect; hwchroot
-    # now bounces SF itself on any 2nd+ daemon start of a boot — maple TEST 41).
-    start glrenderd
+    # Time: the PM8998 RTC is read-only (the DT has no allow-set-time, RTC_SET_TIME is
+    # refused) and this kernel has no /dev/alarm. system_server saves the offset between
+    # wall time and the RTC in /data/system/time/rtc_offset (rtc-restore/rtc_restore.c +
+    # patches/kitkat/frameworks-base-time-without-dev-alarm.patch); apply it before zygote.
+    start rtc-restore
+    # presentation: SurfaceFlinger's ION buffers are committed to the main display's MDSS
+    # pipe by fbpresentd (zero-copy, 64-bit; the 32-bit compat path of MSMFB_ATOMIC_COMMIT
+    # crashes this kernel). Must be up before surfaceflinger's first post; gralloc.maple
+    # falls back to copy + FBIOPUT_VSCREENINFO flips when the socket is missing
+    # (persist.gralloc.fb_commit=0 forces the copy path). No chroot and no glrenderd: the
+    # Adreno driver runs inside each KitKat process (libhyb), so there is a single flipper.
+    start fbpresentd
 
     # the clearpad driver doesn't finish probing (no touch events) until this, lineage does the same
     write /sys/devices/virtual/input/clearpad/post_probe_start 1
@@ -202,10 +205,21 @@ service fuse_sdcard1 /system/bin/sdcard -u 1023 -g 1023 -w 1023 -d /mnt/media_rw
     class main
     disabled
 
-# adreno renderer for the whole ui, surfaceflinger and apps talk to it over the glrenderd socket.
-# stats and crashes land in dmesg
-service glrenderd /system/bin/sh /sbin/glrenderd.sh
+# zero-copy display presenter: takes SurfaceFlinger's ION buffers and commits them to the main
+# display's MDSS pipe. logs and crashes land in dmesg (source: devices/maple/kitkat/fbpresentd)
+service fbpresentd /system/bin/fbpresentd
     class core
+    user root
+    group root graphics
+    disabled
+
+# read-only RTC + no /dev/alarm: restore the wall clock from the RTC plus the offset
+# system_server saved (source: devices/maple/kitkat/rtc-restore). oneshot, runs in
+# post-fs-data once /data is mounted
+service rtc-restore /system/bin/rtc-restore
+    class core
+    user root
+    oneshot
     disabled
 
 # Modem boot + hold (TEST 39, 2026-10-17). Opening /dev/subsys_modem runs

@@ -13,8 +13,10 @@ Verified so far:
   Flashable CWM/TWRP zips are in [Releases](https://github.com/pukikiko/retro-android-ports/releases).
 - **Android 4.4.4 KitKat** (AOSP `android-4.4.4_r2`, KTU84Q) on the **Sony
   Xperia XZ Premium** (`maple`, 2017, MSM8998) — boots to the launcher with
-  touch, USB adb, and hardware GL/GLES 3.2 on the Adreno 540 (via
-  [glrenderd](docs/advanced/software/glrenderd.md)).
+  touch, USB adb, and hardware GL/GLES 3.2 on the Adreno 540 (first via the
+  glrenderd chroot, then the in-process
+  [libhyb](docs/advanced/software/libhyb.md) stack, built 2026-10-18 —
+  flash/verification pending).
 
 Cupcake 1.5 is out of scope: `platform/manifest` no longer carries a
 `cupcake`/`android-1.5` branch (`android-1.6_r1` is the oldest), so Donut
@@ -27,7 +29,7 @@ is the oldest release that can still be synced. The full story — and why a
 | Device | Codename | Ports | Status |
 | --- | --- | --- | --- |
 | Samsung Galaxy Ace GT-S5830/L/T | `cooper` | Donut 1.6 (DRD35) | Boots on-device; launcher, touchscreen + capacitive keys, 160 dpi display, speaker audio. Cellular impossible (no Donut RIL for MSM7227); camera preview is test-pattern only. [Device page](docs/devices/cooper/README.md) |
-| Sony Xperia XZ Premium G8141/G8142 | `maple` | KitKat 4.4.4 (KTU84Q) | Boots to UI; touch, display, USB adb, hardware GL/GLES 3.2 (Adreno 540), brightness/sleep, emulated storage, **audio playback (tasha card)**. WiFi interface still open: SERVREG_LOC now served in-tree by `pdserve` and the PDR chain (icnss) registers its notifier, but the modem root PD crashes every ~41 s before wlan_pd/WLFW can start (modem stability/keepalive open). [Device page](docs/devices/maple/README.md) |
+| Sony Xperia XZ Premium G8141/G8142 | `maple` | KitKat 4.4.4 (KTU84Q) | Boots to UI; touch, display, USB adb, hardware GL/GLES 3.2 (Adreno 540, now in-process via libhyb), brightness/sleep, emulated storage, **audio playback (tasha card)**. WiFi interface still open: SERVREG_LOC now served in-tree by `pdserve` and the PDR chain (icnss) registers its notifier, but the modem root PD crashes every ~41 s before wlan_pd/WLFW can start (modem stability/keepalive open). [Device page](docs/devices/maple/README.md) |
 | Sony Xperia XZ Premium G8141/G8142 | `maple` | Donut 1.6 (DRD35) | Boots to launcher; touch (stable from ~6.5 s, `vtouch` v1.2.0-maple3), tap-to-unlock keyguard, camera half-press → BACK / full-press → MENU, volume keys, readable key character maps (Settings works), portrait orientation. No audio/WiFi/cellular/camera HAL yet. [Device page](docs/devices/maple/README.md) |
 | Sony Xperia XZ1 G8341/G8342 | `poplar` | KitKat 4.4.4 (KTU84Q) | Boots to UI (launcher + nav bar, touch, display, USB adb, HW GL via glrenderd). Same yoshino/MSM8998 platform as maple; tree predates maple TEST 36-37. [Device page](docs/devices/poplar/README.md) |
 
@@ -53,8 +55,9 @@ everything beyond the device pages:
   [build-server runbook](docs/advanced/build-server.md).
 - **Project software** — [vtouch](docs/advanced/software/vtouch.md)
   (multi-touch → single-touch proxy for pre-multitouch Android),
-  [glrenderd](docs/advanced/software/glrenderd.md) (a newer GPU driver
-  under an old Android, in a chroot), [mkbootimg-cooper](docs/advanced/software/mkbootimg-cooper.md)
+  [libhyb](docs/advanced/software/libhyb.md) (a newer GPU driver running
+  inside old-Android processes, Adreno 540 on KitKat),
+  [mkbootimg-cooper](docs/advanced/software/mkbootimg-cooper.md)
   (pagesize-patched Donut mkbootimg).
 
 ## Repository layout
@@ -66,12 +69,12 @@ docs/advanced/README.md            advanced documentation index
 docs/advanced/porting-notes/       per-release playbooks (donut.md, kitkat.md)
 docs/advanced/build/               per-release build guides (donut.md, kitkat.md)
 docs/advanced/build-server.md      remote build-host runbook
-docs/advanced/software/            project-made software (vtouch, glrenderd, mkbootimg-cooper)
+docs/advanced/software/            project-made software (vtouch, libhyb, mkbootimg-cooper)
 docs/devices/<codename>/README.md  device main page: description, status, links
 docs/devices/<codename>/quirks.md  device quirks: everything needed to port to it
 scripts/                           build + packaging + device-tree sync (+ dump-maple-stock.sh, patch-maple-dtb.py)
 containers/<release>/              period build-container recipes (kitkat/)
-tools/                             project-made tools (mkbootimg-cooper, glrenderd sources)
+tools/                             project-made tools (mkbootimg-cooper, libhyb staging/closure)
 reference/                         third-party trees/images kept for board parameters
 ```
 
@@ -87,8 +90,8 @@ Each release has its own end-to-end guide; the README stays short:
   i386 chroot + JDK 5 + GCC 4.2.3; packages
   `out/full_cooper-1.6.DRD35-UNOFFICIAL-FULL-<date>.zip`.
 - [Building KitKat 4.4.4 for maple](docs/advanced/build/kitkat.md) —
-  Trusty + JDK 6 container, TWRP-dumped 4.4 kernel, glrenderd; flash via
-  TWRP `dd`.
+  Trusty + JDK 6 container, TWRP-dumped 4.4 kernel, libhyb closure
+  staging; flash via TWRP `dd`.
 - Doing it on a remote host: [build server runbook](docs/advanced/build-server.md).
 
 ## Roadmap
@@ -109,6 +112,11 @@ Each release has its own end-to-end guide; the README stays short:
       presentation; XZ1/poplar reliability + GL perf sets (TESTs 30–35);
       fresh-image GL boot + daemon crash/restart self-heal (TEST 41);
       lights HAL; wifi feature/supplicant plumbing (TEST 36).
+- [x] maple graphics, second design: glrenderd (chroot + GL socket) replaced
+      by [libhyb](docs/advanced/software/libhyb.md) — the Adreno driver runs
+      in-process, `fbpresentd` presents through an MDSS atomic commit, the
+      glrenderd tooling/patches are deleted. Built 2026-10-18; **flash
+      pending** (no device attached — verify with the libhyb checklist).
 - [ ] Finish maple: WiFi interface (SERVREG_LOC now served in-tree by
       `pdserve` and the PDR chain registers its notifier; blocked on the
       modem root PD crashing every ~41 s — modem stability/keepalive open),
@@ -125,7 +133,9 @@ Each release has its own end-to-end guide; the README stays short:
 - [ ] Finish poplar: add `poplar` to `scripts/sync-device-tree.sh` (done in-tree
       — verify), forward-port maple TEST 36-37 (wifi supplicant services, adsp
       boot, dual-node lights, `service_locator.enable=0`), formalise GPU fixes
-      into `patches/kitkat/`.
+      into `patches/kitkat/`, and port the
+      [libhyb](docs/advanced/software/libhyb.md) stack (poplar still builds the
+      removed glrenderd design, see its README).
 - [ ] Other releases on newer hardware — Eclair/Froyo next (Gingerbread
       through Nougat planned; Cupcake is impossible, source gone).
 
@@ -142,7 +152,8 @@ Device pages and their quirks logs carry the full detail and evidence:
   (`gb-release-7.2`), Apache 2.0, kept for board parameters.
 - `reference/poplar-kitkat-gpu-fixes-2026-10-16.zip` — the complete KitKat
   GPU/display fix bundle from a sibling XZ1 (`poplar`) port (full writeup,
-  patched sources, reference binaries), kept for maple's glrenderd work.
+  patched sources, reference binaries), kept for the poplar port; maple's
+  own GL path has since moved to libhyb.
 - Vendor blobs (Samsung kernel/modules/firmware, Broadcom Atheros wifi
   firmware; reference binaries inside the poplar bundle) are retained to
   keep the ports buildable and remain under their vendors' original
@@ -154,5 +165,8 @@ Device pages and their quirks logs carry the full detail and evidence:
   `devices/poplar/kitkat/` (sherm port).
 - Device photos on the device pages come from Wikimedia Commons under
   CC BY-SA (credit on each page).
-- `vtouch` is ported from MLXProjects' Froyo `vtouch` 1.2.0; `glrenderd`
-  is ported from [chardidathing/pdx203-jellybean](https://github.com/chardidathing/pdx203-jellybean).
+- `vtouch` is ported from MLXProjects' Froyo `vtouch` 1.2.0; `libhyb` is
+  ported from [DoomGuy41/Taimen-KitKat](https://github.com/DoomGuy41/Taimen-KitKat)
+  (the retired glrenderd was ported from
+  [chardidathing/pdx203-jellybean](https://github.com/chardidathing/pdx203-jellybean);
+  its sources remain in git history).

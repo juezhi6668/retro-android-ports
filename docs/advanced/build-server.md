@@ -16,23 +16,37 @@ locally shows peer state, "offline, last seen ..." means wait, not debug).
   https://android.googlesource.com/platform/manifest -b android-4.4.4_r2`,
   then `repo sync -c --no-tags -j6`). Shallow + current-only ≈ 14 GB.
   Full-history sync balloons past 150 GB — never run bare `repo sync`.
-- `~/retro-devices/kitkat/` — copy of `devices/maple/kitkat/` (scp'd).
-  Staged into the tree with
-  `cp ~/retro-devices/kitkat/* ~/aosp-kitkat/vendor/sony/maple/`
-  (the repo's `sync-device-tree.sh` equivalent; script assumes local tree).
+  Not a top-level git repo: each project has its own; revert/apply patches
+  per project.
+- `~/aosp-kitkat/vendor/sony/maple/` — the device tree, kept in sync with
+  the local repo by rsync from the workstation:
+  `rsync -a --delete --exclude=/kernel <repo>/devices/maple/kitkat/ <user>@<host>:~/aosp-kitkat/vendor/sony/maple/`.
+  **The leading slash in `--exclude=/kernel` is not optional**: the
+  TWRP-dumped kernel blob lives at the very top of that directory and
+  `--exclude kernel/` (no slash) does not match the file — the first sync
+  deleted it (`~/maple-tree.bak-20261018` exists for that reason).
+- `~/aosp-kitkat/vendor/sony/maple-hyb/` + `maple-bin/` — the staged
+  graphics closure and NDK-built `fbpresentd`, produced by
+  `tools/libhyb/{extract-lineage.sh,stage.py,build-native.sh}` (copies
+  under `~/retro-tools-libhyb/`, sysroot at `~/hyb-sysroot`, vendor image
+  mounted at `~/vendorextract/mnt`). Outside the rsync path on purpose.
 - `~/retro-containers/kitkat/Dockerfile` — copy of
   `containers/kitkat/Dockerfile`. Rebuild after edits:
   `docker build -f ~/retro-containers/kitkat/Dockerfile -t retro-kitkat:4.4.4 ...`
 - `~/aosp-kitkat/vendor/sony/maple/kernel` — TWRP-dumped `Image.gz-dtb`
   (16.7 MB, NOT in git). Re-dump via
   `adb pull /dev/block/bootdevice/by-name/boot` + `abootimg -x` if lost.
+- `~/android-ndk-r21e/` — NDK used by `build-native.sh` (the KitKat tree
+  can only produce 32-bit binaries; `fbpresentd` must be 64-bit).
 - `~/aosp-kitkat/build-maple.sh` (`lunch full_maple-eng && make -j6`),
-  `build-sys.sh` (`make systemimage`), `build-boot.sh` (`make bootimage`),
-  `run-*.sh` wrappers (`docker run --rm -v ~/aosp-kitkat:/srv/aosp-kitkat
+  `build-images.sh` (`make -j6 systemimage userdataimage cacheimage`),
+  `cleanup-rebuild.sh` (delete the glrenderd-era leftovers from `out/`
+  and rebuild boot + system images), `run-*.sh` wrappers
+  (`docker run --rm -v ~/aosp-kitkat:/srv/aosp-kitkat
   -v ~/ccache-kitkat:/srv/ccache-kitkat ...`, sudo needs the password on
   stdin — see files).
-- Logs: `~/build-maple.log`, `~/build-sys.log`, `~/build-boot.log`,
-  `~/repo-sync*.log`.
+- Logs: `~/build-maple.log`, `~/build-libhyb.log`, `~/build-sys.log`,
+  `~/build-boot.log`, `~/cleanup-rebuild.log`, `~/repo-sync*.log`.
 
 ## Background launches (the channel hangs — verify separately)
 
@@ -58,6 +72,14 @@ short client timeout, IGNORE the timeout, then verify with a fresh call
 - KitKat `make` regenerates `system.img` SPARSE — always `simg2img`
   before `dd` (use the container's `out/host/linux-x86/bin/simg2img`;
   it is 32-bit and won't run on the Ubuntu 26.04 host).
+- **Removing a component does not remove it from the out tree.**
+  `mkuserimg.sh` packs `out/target/product/maple/system` as it stands;
+  after the glrenderd patches were deleted the next image still shipped
+  the 25 MB `/system/glr` chroot, the emulation GL libs and
+  `/sbin/glrenderd.sh` (root-owned, so `sudo` inside the container or the
+  wrapper script). Delete the stale paths or the whole `system/` dir and
+  rebuild the images — `cleanup-rebuild.sh` does exactly that, and it is
+  the model for any future component retirement.
 - `make servicemanager systemimage`-style targets speed up iterations;
   full `make -j6` after UAPI/bionic changes (~1 h, touches everything).
 - `TARGET_NO_KERNEL` is NOT yet set — set it (plus formalize the three
@@ -66,9 +88,21 @@ short client timeout, IGNORE the timeout, then verify with a fresh call
 ## Flash workflow (phone side, from the Linux workstation)
 
 Phone in TWRP (`adb devices` → `recovery`). Images live in repo `dumps/`
-(gitignored):
+(gitignored). The workstation has no `simg2img` (and the AOSP-built one is
+32-bit), so unsparsify **on the server** first:
+
+```sh
+# server, inside the container (or with its out/host tool):
+out/host/linux-x86/bin/simg2img out/target/product/maple/system.img /tmp/system.raw.img
+# workstation:
+rsync -P <user>@<host>:~/aosp-kitkat/out/target/product/maple/boot.img dumps/
+rsync -P <user>@<host>:/tmp/system.raw.img                            dumps/
+```
+
+Then, per image:
+
 - `dd if=<raw-system> of=/dev/block/bootdevice/by-name/system bs=4M`
-  (5 GB raw via simg2img locally; push to `/data/media`, NOT `/sdcard`
+  (5 GB raw; push to `/data/media`, NOT `/sdcard`
   which refuses creates; `adb shell` stdin pipes fail — push files).
 - `dd if=<boot.img> of=/dev/block/bootdevice/by-name/boot bs=4M`
   + read-back md5 verify before every reboot.

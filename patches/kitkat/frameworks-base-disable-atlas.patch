@@ -1,0 +1,18 @@
+ported from Taimen-KitKat (DoomGuy41); Lollipop's config.disable_atlas: the atlas assumes GPU rendering and kills system_server without a config
+
+diff --git a/services/java/com/android/server/SystemServer.java b/services/java/com/android/server/SystemServer.java
+index a42cbcfe..147f4027 100644
+--- a/services/java/com/android/server/SystemServer.java
++++ b/services/java/com/android/server/SystemServer.java
+@@ -782,7 +782,10 @@ class ServerThread {
+                 }
+             }
+ 
+-            if (!disableNonCoreServices) {
++            // Lollipop backport: config.disable_atlas (the atlas assumes GPU rendering;
++            // with software rendering it finds no config and kills system_server)
++            if (!disableNonCoreServices
++                    && !SystemProperties.getBoolean("config.disable_atlas", false)) {
+                 try {
+                     Slog.i(TAG, "Assets Atlas Service");
+                     atlas = new AssetAtlasService(context);

@@ -32,9 +32,9 @@ Step-by-step, from a pristine AOSP checkout to a flashable image:
   the 4096-page boot.img repack, the ext4 system.img packaging script and
   the maple device tree (`devices/maple/donut/`).
 - [Building KitKat 4.4.4 for maple](build/kitkat.md) — Trusty/JDK 6
-  container, prebuilt 4.4 kernel, simg2img/TWRP flashing, glrenderd
-  (same steps for `poplar` with the block-map/panel deltas in
-  [poplar quirks](../devices/poplar/quirks.md)).
+  container, prebuilt 4.4 kernel, libhyb closure staging, simg2img/TWRP
+  flashing (poplar's older glrenderd-based images: block-map/panel deltas
+  in [poplar quirks](../devices/poplar/quirks.md)).
 - [Build server runbook](build-server.md) — layout, footguns and flash
   workflow when building on a remote host.
 
@@ -42,9 +42,11 @@ Step-by-step, from a pristine AOSP checkout to a flashable image:
 
 - [vtouch](software/vtouch.md) — multi-touch to single-touch input proxy;
   makes multi-touch panels work on pre-multitouch releases (Donut 1.6).
-- [glrenderd](software/glrenderd.md) — runs a newer GPU driver (Adreno in
-  a Lineage chroot) under an old Android, with the guest using the
-  emulator GL stack as transport.
+- [libhyb](software/libhyb.md) — runs a newer GPU driver (Adreno 540,
+  Lineage 22.1 closure) inside KitKat processes, with a 64-bit
+  `fbpresentd` presenting through an MDSS atomic commit. Replaced the
+  glrenderd chroot/socket design (sources in `tools/glrenderd/` are in
+  git history).
 - [mkbootimg-cooper](software/mkbootimg-cooper.md) — pagesize-patched
   Donut `mkbootimg` that can pack cooper's boot.img.
 
@@ -53,6 +55,11 @@ Step-by-step, from a pristine AOSP checkout to a flashable image:
 - [charquirks-mapping.md](charquirks-mapping.md) — how a sister port's
   4.2-on-pdx203 notes map onto maple/KitKat (what was independently
   converged, what applied, what is queued).
+- [taimen-kitkat-mapping.md](taimen-kitkat-mapping.md) — how the
+  Pixel 2 XL KitKat port (DoomGuy41/Taimen-KitKat) maps onto ours: the
+  libhyb graphics core plus every one of their patches, adopted or
+  skipped with reasons.
 - [poplar-kitkat-gpu-fixes.md](poplar-kitkat-gpu-fixes.md) — sibling XZ1
   (`poplar`) GPU/display fix reference (developed on poplar, adopted by
-  maple); canonical writeup is [glrenderd](software/glrenderd.md).
+  maple); superseded for maple by [libhyb](software/libhyb.md) — poplar
+  still runs the older glrenderd design (see its README).
