@@ -1,0 +1,32 @@
+diff --git a/phone/com/android/internal/policy/impl/LockScreen.java b/phone/com/android/internal/policy/impl/LockScreen.java
+index 0495a76..69c72a8 100644
+--- a/phone/com/android/internal/policy/impl/LockScreen.java
++++ b/phone/com/android/internal/policy/impl/LockScreen.java
+@@ -24,6 +24,7 @@ import android.text.format.DateFormat;
+ import android.text.TextUtils;
+ import android.view.KeyEvent;
+ import android.view.LayoutInflater;
++import android.view.MotionEvent;
+ import android.view.View;
+ import android.view.ViewGroup;
+ import android.widget.Button;
+@@ -183,6 +184,19 @@ class LockScreen extends LinearLayout implements KeyguardScreen, KeyguardUpdateM
+         return false;
+     }
+ 
++    /* maple bringup: the XZ Premium has no MENU key, so stock's
++     * "press MENU to unlock" has no input (the camera key doubles as MENU,
++     * but that is two buttons away from what the hint says). Unlock on a tap
++     * instead: same callback the MENU key uses, so a secure keyguard still
++     * flows through its own UnlockScreen. */
++    @Override
++    public boolean onTouchEvent(MotionEvent event) {
++        if (event.getAction() == MotionEvent.ACTION_DOWN) {
++            mCallback.goToUnlockScreen();
++        }
++        return true;
++    }
++
+     private void refreshViewsWRTSimOk() {
+         if (mSimOk) {
+             for (int i = 0; i < mOnlyVisibleWhenSimOk.length; i++) {

@@ -1,0 +1,47 @@
+diff --git a/init/devices.c b/init/devices.c
+index ac72b34..1451cab 100644
+--- a/init/devices.c
++++ b/init/devices.c
+@@ -279,11 +279,17 @@ static void make_device(const char *path, int block, int major, int minor)
+     mode_t mode;
+     dev_t dev;
+ 
+-    if(major > 255 || minor > 255)
++    /* Modern kernels use majors above 255 (sde/sda are 259 on maple) and
++     * minors above 255; the old 8:8 limit silently skipped those nodes —
++     * /dev/block/sde46 (system) and sda15 (data) never appeared and every
++     * mount failed. The kernel's mknod syscall takes the glibc 32-bit dev
++     * encoding (12-bit major, 20-bit minor), which is what we build below. */
++    if(major > 4095 || minor > 1048575)
+         return;
+ 
+     mode = get_device_perm(path, &uid, &gid) | (block ? S_IFBLK : S_IFCHR);
+-    dev = (major << 8) | minor;
++    dev = (minor & 0xff) | (major << 8) | ((minor & ~0xff) << 12);
++    progress("dev: %s %d:%d\n", path, major, minor);
+     mknod(path, mode, dev);
+     chown(path, uid, gid);
+ }
+@@ -617,17 +623,22 @@ int device_init(void)
+     fd = open_uevent_socket();
+     if(fd < 0)
+         return -1;
++    progress("devices: uevent socket fd=%d\n", fd);
+ 
+     fcntl(fd, F_SETFD, FD_CLOEXEC);
+     fcntl(fd, F_SETFL, O_NONBLOCK);
+ 
+     t0 = get_usecs();
+     coldboot(fd, "/sys/class");
++    progress("devices: /sys/class coldboot done\n");
+     coldboot(fd, "/sys/block");
++    progress("devices: /sys/block coldboot done\n");
+     coldboot(fd, "/sys/devices");
++    progress("devices: /sys/devices coldboot done\n");
+     t1 = get_usecs();
+ 
+     log_event_print("coldboot %ld uS\n", ((long) (t1 - t0)));
++    progress("devices: coldboot done in %ld uS\n", ((long) (t1 - t0)));
+ 
+     return fd;
+ }

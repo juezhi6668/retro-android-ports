@@ -1,0 +1,52 @@
+#
+# system.prop for maple (Donut 1.6)
+# Appended to the generated system/build.prop by build/core/Makefile
+# (TARGET_DEVICE_DIR/system.prop rule).
+#
+# Display density: MEASURED 410 on the running LineageOS 20 / KitKat port
+# (1080x1920 rendered panel). Donut's surfaceflinger reads ro.sf.lcd_density
+# at startup. cf. cooper's 120-vs-160 lesson: measure, don't guess.
+ro.sf.lcd_density=410
+qemu.sf.lcd_density=410
+
+# Donut GLES is 1.x software (libagl); nothing on 1.6 reads this, kept for
+# parity with the KitKat port's build.prop.
+ro.opengles.version=131072
+
+# No SIM/no telephony stack on this port (rild removed): without this the
+# keyguard machinery can consider the SIM missing and stick (cooper sets it).
+keyguard.no_require_sim=true
+DEVICE_PROVISIONED=1
+
+# No WiFi driver on this port (same kernel wall as KitKat); kept so the
+# wifi stack has an interface name if a driver ever appears.
+wifi.interface=wlan0
+
+# Camera media profiles: Donut stub HAL, no recording. Values from cooper
+# (lowest common denominator) so the camera app's parameter checks pass.
+ro.media.enc.vid.m4v.fps=5,15
+ro.media.enc.vid.m4v.width=176,320
+ro.media.enc.vid.m4v.height=144,240
+ro.media.enc.vid.m4v.bps=90000,770000
+ro.media.enc.vid.h264.fps=5,15
+ro.media.enc.vid.h264.width=176,320
+ro.media.enc.vid.h264.height=144,240
+ro.media.enc.vid.h264.bps=90000,770000
+ro.media.enc.vid.h263.fps=5,15
+ro.media.enc.vid.h263.width=176,320
+ro.media.enc.vid.h263.height=144,240
+ro.media.enc.vid.h263.bps=90000,770000
+
+# Dalvik heap: Donut defaults to ~16 MB (heapgrowthlimit) which is far too
+# small for a 1080x1920 device — LockPatternView's bitmaps (28 KB external
+# alloc) overflow the external-alloc budget and crash system_server
+# ("bitmap size exceeds VM budget", "external allocation too large for
+# this process"). Tuned to the KitKat port's phone-xhdpi-2048-dalvik-heap.mk
+# recipe (verified on maple): heapgrowthlimit is the GC clamp target and the
+# external-alloc budget, so it (not just heapsize) must be raised.
+dalvik.vm.heapstartsize=8m
+dalvik.vm.heapgrowthlimit=192m
+dalvik.vm.heapsize=512m
+dalvik.vm.heaputilization=0.75
+dalvik.vm.heapidealfree=8m
+dalvik.vm.heapconcurrentstart=2m

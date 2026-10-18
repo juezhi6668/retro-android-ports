@@ -1113,3 +1113,464 @@ Next actions (checkboxes for the log):
     `/system/glr/root/glrenderd` hits `Text file busy` until
     `stop glrenderd` — stop → cp → chmod 755 → `sync` → remount ro →
     `start`. Verify deployed identity by md5, not timestamps.
+
+## Bringup log: Donut USB adb (2026-10-18)
+
+- **TEST 42 — the FunctionFS descriptor blob must use this kernel's
+  ancient magic values (`1` / `2`), not the modern `0x502` / `0x503`.**
+  - Symptom: on a Donut boot, adbd retries `open ep0` + `write
+    descriptors` once a second forever (`/cache/adbd-ffs.log`: `write
+    descriptors len=62 FAILED ret=-1 errno=22`), the kernel never logs
+    "read strings", and the gadget never binds — `configfs-gadget
+    a800000.dwc3: failed to start g1: -19` every ~6 s
+    (`ffs_do_functionfs_bind` returns `-ENODEV` until the strings write
+    has set `desc_ready`). `kmsg` shows `functionfs: file system
+    registered` from init and nothing more.
+  - Diagnosis: the f_fs QCOM IPC log
+    (`/sys/kernel/debug/ipc_logging/f_fs/log`, needs debugfs mounted)
+    told the whole story in four lines: `ffs_ep0_write: enter:len 62
+    state 0` → `__ffs_data_got_descs: enter: len 62` →
+    `__ffs_data_got_descs: exit: ret -22` → `ffs_ep0_write: exit:ret
+    …594`, with **no `ffs_do_descs` entry in between**. Only two checks
+    run before `ffs_do_descs`: the length field and the magic; the
+    length matched (62 = 62), so the magic was rejected.
+  - Root cause: our blob was built from the modern enum
+    (`#define FUNCTIONFS_DESCRIPTORS_MAGIC 0x502`), but whatawurst's
+    msm8998 4.4 tree kept the ancient one —
+    `include/uapi/linux/usb/functionfs.h`
+    (`android_kernel_sony_msm8998`, lineage-21):
+    `FUNCTIONFS_DESCRIPTORS_MAGIC = 1`, `FUNCTIONFS_STRINGS_MAGIC = 2`,
+    `FUNCTIONFS_DESCRIPTORS_MAGIC_V2 = 3`. `switch
+    (get_unaligned_le32(data))` hits `default: goto error` for 0x502 —
+    `-EINVAL` before any descriptor logging. TWRP's adbd works on the
+    same kernel because it ships those values: its `init_functionfs`
+    `.rodata` template is `[magic 1, length 62, fs_count 3, hs_count
+    3]` (V1), with `[magic 3, length 0x90, flags 0xf, …]` tried first
+    and `[magic 2, length 32, str_count 1, lang_count 1]` for the
+    strings.
+  - Live proof without a reboot: a *test* ffs instance beside TWRP's
+    live one — `mkdir /config/usb_gadget/g1/functions/ffs.test`
+    (never touch `ffs.adb`), `mkdir -p /dev/usb-ffs/test`,
+    `mount -t functionfs test /dev/usb-ffs/test`, then
+    `exec 3<>/dev/usb-ffs/test/ep0` (**must** be `<>`; an `O_TRUNC`
+    open fails) and `cat blob >&3`. Magic 1/2 → write returns the blob
+    length, the log shows the full `ffs_do_descs` /
+    `ffs_do_single_desc` / `__ffs_data_do_entity` parse plus
+    `ffs_epfiles_create: … eps_count 2`, and `ep1`/`ep2` appear in the
+    mount. Magic 0x502/0x504 → the same one-line `exit: ret -22`.
+    **Reading the ipc log consumes it** — read it exactly once,
+    immediately after the write, or the evidence is gone.
+  - Fix: `patches/donut/system-core-adbd-ffs.patch` now sets
+    `FUNCTIONFS_DESCRIPTORS_MAGIC 1` / `FUNCTIONFS_STRINGS_MAGIC 2`
+    (with a comment saying why). Verified 2026-10-18: boot.img with the
+    fixed adbd flashed (prefix md5 match), `adb reboot` → host
+    enumerates `mapledonut device` ~30 s later — a real adb transport,
+    where every previous attempt showed only TWRP's `recovery`.
+  - Follow-up (same TEST, later in the night — the "phone vanished"
+    explanation): the diagnostic build's `usbudc.sh` was an unbind +
+    rebind loop (`echo "" > $UDC`; sleep 3; `echo a800000.dwc3 > $UDC`)
+    that ran forever and only *logged* `bind FAILED rc=0 err= eps=[]` —
+    both the rc and the empty `eps` were readback races: the QCOM
+    configfs bind is asynchronous (the write returns, the gadget starts
+    ~0.4 s later), so reading the UDC in the same instant always showed
+    empty, and the next cycle's unbind then tore down the connection it
+    had just made. Host `journalctl -k` proves it: `maple-donut` connect
+    → disconnect every 6 s, 42 cycles (11:52–11:57), device numbers
+    119–160; the phone's kmsg has the matching
+    `configfs-gadget gadget: high-speed config #1: b` every cycle and
+    **zero** `failed to start g1: -19`. The 240 s autowinch then rebooted
+    to recovery mid-flap (`mdss_fb_release_all: … name=reboot`) and the
+    host saw TWRP again 17 s later. Fix: `usbudc.sh` now uses the KitKat
+    port's proven semantics — poll the UDC, bind when it reads empty,
+    **never unbind** (rebinding when adbd drops the gadget is still
+    needed: closing the ffs instance unbinds it). Verified on-device
+    (2026-10-18): adb enumerated as `mapledonut device` and worked; the
+    flap explanation is host-log + phone-kmsg backed.
+  - Follow-up 2 (same TEST) — **the real reason a boot came up with no
+    USB: Donut's shell has no `[`.** The next boot used a `usbudc.sh`
+    whose bind was gated on `[ -z "$(cat $UDC)" ]`. Donut's
+    `/system/bin/sh` has no `[`/`test` — builtin or binary — so every
+    `[ ... ]` prints `[: not found`, returns non-zero and silently takes
+    the **else** branch. The script's `while [ $i -lt 600 ]` performed
+    zero iterations: kmsg has exactly one usbudc line, `usbudc: bind
+    FAILED after 0 tries rc= err=` at 2.840 s, the whole boot has zero
+    `configfs-gadget` lines, and the 900 s autowinch returned the phone
+    to TWRP (12:39, 2026-10-18). An earlier "first bind raced adbd's ep0
+    setup" theory for this same boot was wrong — nothing was ever written
+    to the UDC. Found by chrooting into the Donut `/system` from TWRP and
+    running the shipped script with Donut's own shell; capability map and
+    the generic lesson are in
+    [donut.md](../../advanced/porting-notes/donut.md). The ep1-gate
+    script and the state-aware autowinch that this (wrong) theory
+    produced are gone — see Follow-up 3.
+  - Follow-up 3 (same TEST) — **Donut-shell-safe scripts work: the gadget
+    binds once and stays up; `adb shell` then needed one more fix (and
+    got it).** `usbudc.sh` was rewritten with exit statuses only: after a
+    12 s wait, every 3 s `cmp $UDC /cache/usbudc-unbound >/dev/null
+    2>&1 && echo a800000.dwc3 > $UDC`, plus one `/dev/kmsg` tick per
+    attempt; the reference file holds exactly the unbound UDC content.
+    That content was verified on-device with Donut's own shell against a
+    live *unbound* gadget (`mkdir /config/usb_gadget/testg`, never
+    bound, TWRP's `g1` untouched): unbound UDC = 1 byte `"\n"` (cmp
+    rc 0 → bind), bound UDC = `a800000.dwc3\n` (rc 1 → skip), and
+    `echo "" > /cache/usbudc-unbound` reproduces the unbound content
+    byte-for-byte. Flight evidence (boot 2026-10-18 12:45): kmsg
+    `usbudc: start` 2.897 s, tick 1 14.899 s, `configfs-gadget gadget:
+    high-speed config #1: b` 15.450 s, tick n every 3 s — no unbind, no
+    rebind, no `-19`; host dmesg shows one single `new high-speed USB
+    device … 18d1:4ee7 … maple-donut` (device 37) that stays attached
+    the whole session, `adb devices` → `mapledonut device`.
+    - `adb pull` (sync service) worked at once; `adb shell <cmd>`
+      accepted the request (client trace: `OKAY` right after
+      `shell:<cmd>`) and then hung forever. Root cause was **not** the
+      transport: `service_to_fd`'s `const char* args[2]` was a local
+      array handed to the service thread (stack-use-after-return), so
+      the exec'd child was a bare `/system/bin/sh` with **no `-c`** and
+      waited on stdin. Diagnosed without a shell by `adb pull`ing
+      `/proc/<pid>/cmdline` (15 bytes = `/system/bin/sh\0` only),
+      `/proc/<pid>/wchan` (`pipe_read`) and `/proc/<pid>/syscall`
+      (`3 …` = `read(0, …)`), the pid taken from the bootlog snapshot
+      while a long `adb shell sleep 60` was open.
+    - Fix (patches/donut/system-core.patch): `strdup()` the command in
+      `service_to_fd`, build the `-c <cmd>` args inside `shell_service`,
+      `free()` when the child exits; the same latent bug in `reboot:`
+      (argument points into the freed OPEN packet) fixed the same way.
+      Verification — **verified 2026-10-18 13:01** (boot.img md5
+      `e6ee2096b22c4956dd152f38dc681d98`, flashed by dd with a 17 MB
+      prefix readback match): `adb shell echo hello-donut` →
+      `hello-donut`, `adb shell id` → `uid=0(root) gid=0(root)`, stderr
+      merges (`echo out; echo err >&2` returns both), three consecutive
+      independent shell sessions succeed, `pull`/`push` unchanged. The
+      same boot has the clean USB story: `usbudc: start` 2.837 s, tick 1
+      14.840 s, `configfs-gadget gadget: high-speed config #1: b`
+      15.449 s, ticks every 3 s after, zero `-19`, one host enumeration.
+      The autowinch was killed from the host once the shell was up (pid
+      found by `cat`ing `/proc/<pid>/cmdline` for every `/system/bin/sh`
+      pid) so the session can outlive 15 minutes.
+
+## Bringup log: Donut system_server crash + atomics (2026-10-18)
+
+- **Root cause of the system_server crash loop = barrier-less bionic
+  `__atomic_*` on a weakly-ordered multi-core CPU.** Donut's
+  `bionic/libc/arch-arm/bionic/atomics_arm.S` reimplements
+  `__atomic_cmpxchg/inc/dec/swap` with LDREX/STREX but **omits the full
+  memory barriers** the original kuser helpers provided. `cutils/atomic.h`
+  documents the contract ("all reads or writes issued before
+  android_atomic_* operations are guaranteed to complete before the atomic
+  operation takes place" = full barrier). On the 4-core Cortex-A73
+  (MSM8998, AArch32 compat) this breaks mutual exclusion in bionic
+  pthread mutexes and libutils `futex_mutex` (both call `__atomic_*`),
+  and indirectly Dalvik locking. Symptom: system_server + acore crash loop
+  (10 tombstones in 3 min, 2026-10-18 16:49–16:52), `abort ←
+  mspace_free ← dvmHeapSourceFree ← sweepBitmapCallback ← ... ←
+  gcForExternalAlloc` (heap corruption) and `free ←
+  SharedBuffer::release ← ~String16 ← Parcel::writeInterfaceToken`
+  (fault 0x0d). Controlled experiment: `msptest 3` (4 threads × 1M iters,
+  CAS spinlock + protected counter + malloc churn) = SIGSEGV rc=139 on
+  the old libc, PASS after the fix. Fix: add `dmb sy`
+  (`.word 0xf57ff05f`) before and after every LDREX/STREX in all four
+  `__atomic_*` functions; also rewrite libcutils `android_atomic_swap`
+  (the one remaining `swp`) as LDREX/STREX+dmb. Verified:
+  `msptest 3` and `msptest 4` (atomic conformance) PASS on both the TWRP
+  kernel (4.4.263) and the Donut kernel (4.4.302) with the fixed libc
+  (md5 `2b6469277b6c4375849ea3c0d96f85d3`) and libcutils (md5
+  `af710d64a95e0936f8841de6f37afe44`); baseline (barrier-less) `msptest
+  3` = SIGSEGV on both kernels.
+- **Kuser helpers exist on this kernel** (`CONFIG_KUSER_HELPERS=y`,
+  `CONFIG_COMPAT=y`); the kuser page is mapped at 0xffff0000 with version
+  word 0x00000005. The kuser-based `android_atomic_*` (libcutils, full
+  barrier) all pass conformance. The earlier "kuser/page missing"
+  hypothesis was wrong: the trap was `swp`, not a missing page.
+- **SWP emulation is on** (`CONFIG_SWP_EMULATION=y`) — `swp` is emulated
+  (slow, not fatal), so the original crash was heap corruption from the
+  missing barriers, not an instruction fault. `swp` traps on ARMv8 without
+  emulation; the LDREX rewrite avoids the dependency entirely.
+- **Secondary stopper: `com.android.phone` OOMs on the lock screen.**
+  With the heap still at the Donut default (16 MB growth limit), the
+  lock-pattern wallpaper bitmap (28 KB external alloc) overflowed the
+  budget: `dalvikvm-heap: 28900-byte external allocation too large for
+  this process` → `OutOfMemoryError: bitmap size exceeds VM budget` in
+  `LockPatternView.getBitmapFor` → `InflateException` on `UnlockScreen`
+  (Binary XML line #60) → WindowManagerPolicy thread dies → main-thread
+  NPE at `ViewRoot.setView` (ViewRoot.java:428) → `I/Process: Sending
+  signal … SIG: 9` → zygote exits → init restarts zygote → crash loop.
+  Fix: set `USE_CUSTOM_RUNTIME_HEAP_MAX := 512m` in `BoardConfig.mk` —
+  Donut's dalvik ignores the `dalvik.vm.heap*` props (those are a
+  Honeycomb+ invention) and reads the max heap only from `-Xmx`, which
+  defaults to 16 m (`AndroidRuntime.cpp` uses `-Xmx16m` unless
+  `USE_CUSTOM_RUNTIME_HEAP_MAX` is defined). The `dalvik.vm.heap*` lines
+  in `system.prop` are kept for documentation only. Also
+  `com.android.phone` crashed separately: `PhoneApp.onCreate` →
+  `PhoneUtils.setAudioMode` → `AudioManager.setMode` NPE (audio service
+  not yet registered at that instant); made `AudioManager.setMode`
+  null-safe. `patches/donut/` (AudioManager null-safety).
+- **Bringup instrumentation added (TEMP, remove before release):**
+  - `/dev/log` FIFO shim (`devices/maple/donut/logshim/logshim.c`,
+    static binary `/sbin/logshim`): creates
+    `/dev/log/{main,radio,events}` FIFOs at `on init` (via `exec
+    /sbin/logshim --init`) and mirrors each to
+    `/cache/logcat-{main,radio,events}.txt` via a non-blocking reader
+    service defined before zygote. Donut's liblog opens all three with
+    O_WRONLY and disables logging if any fails, so all three are
+    required. Records are raw `[priority][tag\0][msg\0]` (no
+    logger_entry header); `tools/parse-logcat.py` untangles the main one.
+  - `system/core/init/init.c` `zap_stdio()`: stderr now goes to
+    `/dev/kmsg` instead of `/dev/null`, so crash output (Java uncaught
+    exception traces, linker errors) lands in `/cache/kmsg.txt` (already
+    captured + rotated + fsync'd by klogd). TEMP bringup patch.
+  - Both are logged as bringup-only in the device tree; remove once the
+    port is stable (AGENTS.md patch-set discipline).
+- **Validation:** `msptest 4` (conformance) + `msptest 3` (4 threads ×
+  1M iters) PASS on both TWRP (4.4.263) and Donut (4.4.302) kernels
+  with the fixed libc (md5 `2b6469277b6c4375849ea3c0d96f85d3`) and
+  libcutils (md5 `af710d64a95e0936f8841de6f37afe44`); baseline
+  (barrier-less) `msptest 3` = SIGSEGV (rc=139) on both kernels.
+
+## Bringup log: Donut touch panel + keyguard (2026-10-18)
+
+- **TEST 43 — the clearpad panel stays silent until userspace writes
+  `post_probe_start`; `vtouch` now does it (Donut 1.6 has no init trigger
+  for it).**
+  - Symptom: touch works nowhere in Donut — `getevent` on vtouch's
+    virtual node (`/dev/input/event7`) and on the preserved real node
+    (`/dev/input/vtouch_saved`) both show zero events while a finger
+    drags across the panel, and the lock screen never reacts. The
+    framework side looks fine: EventHub/KeyInputQueue accept
+    `maple_vtouch` (id 0x10000, ABS_X 0..2159 / ABS_Y 0..3839), so the
+    fault is below the relay.
+  - Diagnosis: boot dmesg has `clearpad clearpad: (clearpad_probe:9356)
+    post_probe_start sysfs is required to start post probe` — the driver
+    finishes i2c probe (~1.8 s) and then parks: panel powered but silent
+    (no IRQ, no events). The gate
+    `/sys/devices/virtual/input/clearpad/post_probe_start` (class symlink
+    `clearpad -> input7`) reads `0` until the first write.
+  - Runtime proof: writing `1` makes dmesg show `start post probewith
+    post_probe_start sysfs` → `begin 'post probe' session` → `ensure
+    firmware` → device id `PLG1163-C1` (family 0xd1, fw rev 0x03.02) →
+    `end post probe ... (rc=0)`, and the same finger drag then produces
+    5800 raw protocol-A events on the real node and 1571 translated
+    events (BTN_TOUCH + ABS_X/Y) on the virtual one — the clearpad →
+    vtouch → Donut chain is good once the panel is awake.
+  - Where the write comes from elsewhere: stock Sony init, the KitKat
+    port (`devices/maple/kitkat/init.maple.rc`, `on post-fs-data`) and
+    TWRP (`/init.recovery.maple.rc`, `on post-fs`: `# start
+    clearpad_post_probe when filesystem is available for fwflash`) —
+    which is why the touch screen works in recovery on the same kernel.
+    Donut 1.6's init has no `post-fs`/`post-fs-data` triggers at all
+    (`system/core/init/init.c` queues `early-init`/`init`/`early-boot`/
+    `boot` + property triggers), and the sysfs node only appears during
+    kernel probe (~2.9 s in this boot), so a one-shot `on boot` write
+    can silently race it.
+  - Fix: `devices/maple/donut/vtouch/vtouch.c` `start_post_probe()` —
+    run after the virtual-node substitution (system_server's one-shot
+    input scan must still find `maple_vtouch`) and before the relay
+    loop; opens `/sys/devices/virtual/input/clearpad/post_probe_start`
+    (stable symlink path — never hardcode `inputN`) and writes `1`,
+    retrying 1x/s for up to 60 s. No events can exist before the write,
+    so the wait loses nothing.
+  - Verification: runtime side done (above). Boot side verified (2026-10-19) — on
+    the first boot of the vtouch-write build: dmesg post probe with no
+    manual poke + `/dev/.vtouch.log` `touch panel post probe started
+    (try N)`. Verified on the vtouch-write build (2026-10-19): dmesg shows
+     clearpad_post_probe_start_store -> start post probe @ 3.043 -> ensure
+     firmware -> end post probe ... (rc=0) with no manual poke, and
+     /dev/.vtouch.log shows `touch panel post probe started (try 0)` +
+     `relaying on /dev/input/event7`. The same boot also exposed the
+     firmware-fallback stall (TEST 45).
+- **TEST 44 — no MENU key on this hardware: the camera shutter full
+  press now sends MENU, and the keyguard unlocks on a tap.**
+  - Background: Donut predates action bars; the non-secure keyguard's
+    only unlock input is `KEYCODE_MENU` (`LockScreen.onKeyDown` →
+    `mCallback.goToUnlockScreen()` → `keyguardDone(true)`), and apps
+    expect a MENU key too. The lock screen hint said "Press Menu to
+    unlock." — a button that does not exist.
+  - Hardware: `getevent` with no device argument (TWRP, same kernel)
+    shows the two-stage shutter on `gpio-keys`/event6 emitting clean
+    pairs — half press `0001 0210` (KEY_CAMERA_FOCUS 528), full press
+    `0001 02fe` (KEY_CAMERA_SNAPSHOT 766); 16 down/up pairs for 16
+    presses. First proof the button works at all.
+  - Fix 1 — physical MENU: `devices/maple/donut/gpio-keys.kl` maps
+    `key 766 MENU WAKE_DROPPED` (full press only — a full press also
+    emits the half-press code, so mapping both to MENU would fire two
+    MENU presses per press and toggle a just-opened menu shut). The half
+    press (528) is now `BACK` (no wake flag) for in-app navigation
+    (was `FOCUS`); the camera's autofocus on half-press is given up for
+    this (camera HAL is not started on this port). Tokens checked against
+    Donut's
+    `frameworks/base/include/ui/KeycodeLabels.h` (`MENU`=82, `FOCUS`=80,
+    `CAMERA`=27) because `KeyLayoutMap` discards the whole file on an
+    unknown token.
+  - Fix 2 — tap to unlock: `LockScreen.onTouchEvent` calls the very same
+    `mCallback.goToUnlockScreen()` on ACTION_DOWN; a secure keyguard
+    still routes through its own `UnlockScreen`. The keyguard window is
+    touchable (`KeyguardViewManager`: TYPE_KEYGUARD with
+    FLAG_FORCE_NOT_FULLSCREEN / optional FLAG_ALT_FOCUSABLE_IM — no
+    FLAG_NOT_TOUCHABLE) and no child consumes touches outside the
+    emergency button, so the tap lands on the LockScreen view. Hints
+    updated to "Tap to unlock." / "Tap to unlock or place emergency
+    call.".
+  - The SIM-missing keyguard trap: `stuckOnLockScreenBecauseSimMissing()`
+    (`mRequiresSim && !isDeviceProvisioned() && simState == ABSENT`) and
+    PUK_REQUIRED make `goToUnlockScreen()` a silent no-op; the port's
+    `system.prop` already sets `keyguard.no_require_sim=true` (so
+    `mRequiresSim` is false), and the dead-end SIM lock screen can never
+    appear (the test device has no SIM anyway).
+  - Patches:
+    `patches/donut/frameworks-policies-keyguard-touch-unlock.patch`
+    (apply from `aosp-donut/frameworks/policies/base`) and
+    `patches/donut/frameworks-base-keyguard-touch-unlock.patch` (apply
+    from `aosp-donut/frameworks/base`).
+  - Verification: hardware codes above. Verified (2026-10-19): tap unlocks
+    the keyguard ("Tap to unlock."), camera full press (766) delivers MENU
+    (launcher menu opens), volume up/down work, and the launcher stays up
+    (no crash loop). The keychar fix (0644) is what made the launcher
+    stable.
+- **adb's device serial tells you which boot you are in.** Donut boots
+  advertise `mapledonut`; TWRP advertises the phone's own serial +
+  `recovery` (`CB512EGGHD  recovery`) and does NOT mount `/system`
+  (`ls /system/bin` → `No such file or directory`, tools look
+  "missing"). Check `adb devices` before debugging a vanished binary.
+
+## Bringup log: Donut default orientation stuck in landscape (2026-10-19)
+
+- **TEST 48 — the flip-cover hall sensor (bu520x1nvx) reports "lid open" and
+  Donut forces landscape.**
+  - Symptom: the home screen (and every app) renders in landscape
+    (horizontal) on a portrait panel; rotating the phone does nothing
+    (no auto-rotate — the sensor HAL, `sensors.maple.so`, is absent).
+  - Diagnosis: `WindowManagerService` logged `Setting rotation to 1,
+    animFlags=1` on every boot. `PhoneWindowManager.rotationForOrientationLw`
+    returns `Surface.ROTATION_90` (1) when `mLidOpen` is true, and
+    `readLidState()` sets `mLidOpen = (getSwitchState(0) == 0)`. The
+    bu520x1nvx hall sensor (flip-cover, SW_LID, input4) reports 0 with no
+    cover attached, so Donut treats the flip cover as a sliding keyboard
+    being opened and forces landscape. The framebuffer itself is 1080x1920
+    (portrait) and touch coordinates already match it; only the rotation
+    policy is wrong.
+  - Fix: `frameworks/policies/base/.../PhoneWindowManager.java`:
+    `KEYBOARD_ALWAYS_HIDDEN = false -> true` (maple has no sliding
+    keyboard), and guard the lid-open branch with `!KEYBOARD_ALWAYS_HIDDEN`,
+    so a flip-cover "open" no longer forces landscape. Recorded as
+    `patches/donut/frameworks-policies-orientation.patch` (applied from
+    `aosp-donut/frameworks/policies/base`).
+  - Verification: verified on the orientation-fixed image (2026-10-19) —
+    home screen is upright (portrait) and stays portrait (no auto-rotate
+    without the sensor HAL, which is absent on this port).
+
+## Bringup log: power button handling (2026-10-19)
+
+- **TEST 47 — the power button is handled by the kernel's `powerkey_handle`,
+  not by Android's input system, and is blocked by USB debugging.**
+  - Symptom: pressing the power button does nothing visible while the phone
+    is on USB (adb). dmesg shows the kernel *does* react:
+    `registering powerkey_handle handle for qpnp_pon` at boot, and each
+    press logs `PM: suspend entry` -> `msm-dwc3 a800000.ssusb: Abort PM
+    suspend!! (USB is outside LPM)` -> `PM: suspend exit`. The qpnp_pon
+    input node declares only scancodes 19/20 (KEY_R/KEY_T) in its
+    capability bitmask and delivers no evdev events to userspace, so
+    Android's input system never sees a `KEYCODE_POWER`.
+  - Diagnosis: the PMIC power key is handled at the kernel level by
+    `powerkey_handle`, which attempts a full system suspend. With USB
+    debugging active the USB controller is not in low-power mode, so the
+    suspend is aborted and the screen stays on — "nothing happens". With
+    USB unplugged the suspend succeeds and the screen locks (kernel path).
+    `PowerManagerService.goToSleep()` does not turn off the display in this
+    port either: sleep goes through the ported lights HAL, not
+    PowerManagerService, so there is no Android-level lock path today.
+  - Attempted/considered fixes: a keylayout entry for qpnp_pon cannot help
+    (no evdev events arrive); a userspace daemon tailing `/dev/kmsg` for
+    `PM: suspend entry` and calling `service call power 2 i32 <uptime>`
+    (goToSleep) does not turn off the display in this port; turning the
+    backlight off via `/sys/class/backlight/panel0-backlight/brightness`
+    would only blank the panel, not lock. A real fix needs either the
+    PM->lights integration in PowerManagerService or a kernel change making
+    qpnp_pon report `KEY_POWER` via evdev (kernel source is a prebuilt blob
+    here, `work/maple-donut/kernel-Image.gz-dtb`).
+  - Workarounds documented: unplug USB and the power button locks the
+    screen (kernel path); during development use
+    `adb shell "service call power 2 i32 0"` is a no-op for display, so use
+    `adb shell "echo 0 > /sys/class/backlight/panel0-backlight/brightness"`
+    to blank and `echo 4095 > .../brightness` to restore. Not blocking the
+    port; tracked as an open item.
+
+## Bringup log: Donut touch firmware fallback + key character maps (2026-10-19)
+
+- **TEST 45 — the clearpad post probe is gated behind a 3x60 s firmware-load
+  fallback.**
+  - Symptom: touch works nowhere for ~3 minutes after every boot, then
+    suddenly works (lock screen starts responding to taps, home screen
+    usable). Rebooting and testing within the first 3 minutes reproduces
+    "touch is broken"; waiting past ~3 minutes "fixes" it. The panel is not
+    actually broken — the kernel driver is busy.
+  - Diagnosis: dmesg timeline on a clean boot: `[3.043] start post probe` ->
+    `[3.306] ensure firmware` -> `[63.336] retry fwflash (0)` ->
+    `[123.390] retry fwflash (1)` -> `[183.443] retry fwflash (2)` ->
+    `[183.496] WA for Yoshino BU` -> `[183.759] end post probe @ 183.759
+    (rc=0)`. Each `retry fwflash (N)` is preceded by a 60 s
+    `request_firmware(touch_module_id_0xd1.img)` wait that fails with
+    rc=-11 (EAGAIN) because Donut has no userspace firmware loader (no
+    ueventd firmware handling); the driver retries 3x, then resets the
+    panel (SW reset) and completes the post probe. Touch emits only after
+    that. Confirmed by the user: "touch started working on home screen" on a
+    boot older than ~3 minutes, "touch stopped working after restarting"
+    (reboot, tested inside the 3-minute window), and "It reacts now" at
+    uptime 328 s (> 184 s).
+  - Knob: the firmware class exposes a class attribute
+    `/sys/class/firmware/timeout` (default 60, seconds) — the wait length.
+    Writing `1` makes each retry fail in ~1 s, so the whole post probe
+    finishes ~4 s after the kick instead of ~184 s. Confirmed writable on
+    this kernel (readback 1).
+  - Fix: `devices/maple/donut/vtouch/vtouch.c` `set_fw_timeout()` writes `1`
+    to that attr first thing in `start_post_probe()` (before the
+    post_probe_start write), so the driver sees the new timeout before its
+    first request. Version bumped to v1.2.0-maple3. No belt-and-suspenders
+    write in init is needed: no other driver requests firmware during boot on
+    this port (dmesg shows zero other `fw request` lines), and vtouch runs
+    at ~3 s, before the first request at ~3.3 s.
+  - Verification: knob write verified live (readback 1); the driver refuses
+    to re-run once post probe has completed (`clearpad_post_probe_start_store:
+    already post probed, need reboot`), so the end-to-end timing
+    (`end post probe @ ~7 s`) is verified only after the next flash+reboot.
+    Verified on the maple3 image (2026-10-19): dmesg shows `end post probe
+    @ 6.529345232 (rc=0)` with retries at 4.10/5.16/6.21 s, vtouch log
+    shows `firmware load timeout set to 1s`, and touch responds on the lock
+    screen within seconds of boot (user-confirmed "touch works off the bat").
+  - Generic lesson: porting-notes/donut.md "Firmware loads that wait for a
+    missing userspace helper".
+
+- **TEST 46 — key character maps shipped mode 0640: Settings/Launcher
+  SIGSEGV.**
+  - Symptom: opening Settings (or any app that loads a key character map)
+    crashes the app with SIGSEGV. logcat shows
+    `W/KeyCharacterMap: Can't open keycharmap file '/system/usr/keychars/
+    gpio-keys.kcm.bin'` then `E/KeyCharacterMap: Can't find any keycharmaps
+    (also tried /system/usr/keychars/qwerty.kcm.bin)` then
+    `I/DEBUG: signal 11 (SIGSEGV), fault addr 00000004` with
+    `#00 pc ... /system/lib/libui.so` -> `#02 ... /system/lib/
+    libandroid_runtime.so` -> `#03 ... /system/lib/libdvm.so`. Tombstones
+    tombstone_01/02/04/05/09 are com.android.settings; tombstone_00/03/06/07/
+    08 are android.process.acore (the Launcher, which runs in that process on
+    Donut). The launcher crash loop observed earlier in the bringup (TEST
+    43/44 timeframe) is the same fault.
+  - Root cause: `build/tools/kcm/kcm.cpp` creates the `.kcm.bin` files with
+    `open(..., O_RDWR|O_CREAT|O_TRUNC, 0660)`. The build's umask (022) leaves
+    them 0640 (`root:root`, no other-read), so app processes (uid app_*)
+    cannot open them (`open()` returns EACCES -> `try_file()` returns NULL
+    -> `KeyCharacterMap::load()` returns NULL -> the native JNI path
+    dereferences it -> fault addr 4). The keylayout (`.kl`) and idc files
+    are 0644 and load fine, so the camera->MENU mapping and touch idc were
+    never affected by this.
+  - Fix: `build/tools/kcm/kcm.cpp` 0660 -> 0644 plus `fchmod(out, 0644)`
+    (creat mode alone is masked by umask), recorded as
+    `patches/donut/build-kcm-file-mode.patch` (applied from
+    `aosp-donut/build`); plus belt-and-suspenders `chmod 0644` on
+    `*.kcm.bin` in `scripts/build-maple-donut-image.py`. The packaging
+    script's chmod is what makes the flashable image correct even if the host
+    tool is unpatched.
+  - Verification: runtime side verified (debugfs showed the image's
+    `/usr/keychars/*.kcm.bin` at mode 0640 before the fix; logcat showed the
+    crash backtrace in libui; after the fix the files are 0644 in the new
+    image). Flash side verified (2026-10-19): the device's
+    `/system/usr/keychars/*.kcm.bin` are mode 0644, logcat shows 0
+    `Can't find any keycharmaps` warnings and 0 `has died` lines on the
+    fresh boot, and Settings opens without crashing.

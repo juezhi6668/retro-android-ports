@@ -94,6 +94,13 @@ Each release has its own end-to-end guide; the README stays short:
 
 - [x] Donut 1.6 on `cooper`: boot to the home screen with touchscreen +
       speaker audio (2026-10-12). Release zips shipped.
+- [x] Donut 1.6 on `maple`: boots to the launcher with touch (stable from
+      ~6.5 s after boot, `vtouch` v1.2.0-maple3 sets the firmware-class
+      timeout to 1 s), tap-to-unlock keyguard, camera half-press -> BACK /
+      full-press -> MENU, Settings/key character maps (0644) fixed, volume
+      keys, portrait orientation (flip-cover lid sensor no longer forces
+      landscape). Device tree at `devices/maple/donut/`; quirks in
+      `docs/devices/maple/quirks.md` (TEST 43-48).
 - [ ] Finish cooper: USB adb shell, SD/vold, WiFi (ath6kl mid-bringup),
       camera sensor feed (needs a kernel sensor driver, not a HAL change).
 - [x] KitKat 4.4.4 on `maple`: boots to the launcher with touch, display,

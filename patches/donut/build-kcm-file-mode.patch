@@ -1,0 +1,22 @@
+diff --git a/tools/kcm/kcm.cpp b/tools/kcm/kcm.cpp
+index 3e6320b..b83d4e5 100644
+--- a/tools/kcm/kcm.cpp
++++ b/tools/kcm/kcm.cpp
+@@ -198,11 +198,16 @@ main(int argc, char** argv)
+         return 1;
+     }
+ 
+-    int out = open(outfilename, O_RDWR|O_CREAT|O_TRUNC, 0660);
++    int out = open(outfilename, O_RDWR|O_CREAT|O_TRUNC, 0644);
+     if (out == -1) {
+         fprintf(stderr, "kcm: error opening file for write: %s\n", outfilename);
+         return 1;
+     }
++    /* The host umask (022 in this chroot) masks the creat mode, so the file
++     * would otherwise land as 0640 and app processes (uid app_*) could not
++     * read the key character map (libui SIGSEGVs when load() fails). Force
++     * a world-readable mode regardless of umask. */
++    fchmod(out, 0644);
+ 
+     int count = keys.size();
+     

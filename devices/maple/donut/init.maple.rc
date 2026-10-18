@@ -1,0 +1,102 @@
+# init.maple.rc — maple (Sony Xperia XZ Premium) hardware services for
+# Android Donut 1.6. Auto-parsed by Donut init: get_hardware_name() lowercases
+# and truncates the kernel cmdline's androidboot.hardware ("maple"), then
+# parses /init.<hardware>.rc. NOTE: Donut's `import` is a no-op — this file
+# is self-contained and parsed exactly once; do not import it elsewhere.
+
+# ---------------------------------------------------------------------------
+# Device permissions. Donut's ueventd has a static built-in table
+# (system/core/init/devices.c devperms[]) covering the Dream-era nodes;
+# everything else is declared here with `device <path|prefix*> <mode> <uid>
+# <gid>`. ueventd applies these when it creates the nodes at coldboot.
+# ---------------------------------------------------------------------------
+device /dev/graphics/* 0660 root graphics
+device /dev/input/* 0660 root input
+device /dev/uinput 0660 root input
+device /dev/binder 0666 root root
+device /dev/ashmem 0666 root root
+device /dev/ion 0666 system graphics
+device /dev/kgsl-3d0 0666 root graphics
+device /dev/snd/* 0660 system audio
+device /dev/dsp 0660 system audio
+device /dev/rtc0 0660 system system
+device /dev/console 0600 root root
+# /dev/block/* stays at the default 0600 root root: mounts happen as root,
+# and vold (which would need mount-group access) is disabled on this port.
+
+# ---------------------------------------------------------------------------
+# USB: the 4.4 kernel is configfs-only (androidboot.configfs=true); the
+# legacy android_usb writes fail silently. Build the FunctionFS gadget
+# skeleton here (writes that miss are logged, not fatal), adbd (patched for
+# FFS, see patches/donut/system-core-adbd-ffs.patch) writes its descriptors
+# to ep0, and usbudc.sh binds the UDC — adbd closes ep0 on every disconnect
+# and closing an ffs instance unbinds the whole gadget, so the bind must be
+# re-armed forever (KitKat port's usbudc.sh, same reason).
+# ---------------------------------------------------------------------------
+on init
+    mkdir /config 0770 shell shell
+    mount configfs none /config
+
+on init
+    write /cache/dnut-04-configfs-block ok
+    write /dev/kmsg dnut-04-configfs-block-done
+
+on init
+    # at superspeed the config comes up empty; force high speed
+    write /sys/devices/soc/a800000.ssusb/speed high
+
+on init
+    mkdir /config/usb_gadget/g1 0770 shell shell
+    write /config/usb_gadget/g1/idVendor 0x18d1
+    write /config/usb_gadget/g1/idProduct 0x4ee7
+    write /config/usb_gadget/g1/bcdUSB 0x0200
+    mkdir /config/usb_gadget/g1/strings/0x409 0770 shell shell
+    write /config/usb_gadget/g1/strings/0x409/serialnumber mapledonut
+    write /config/usb_gadget/g1/strings/0x409/manufacturer Sony
+    write /config/usb_gadget/g1/strings/0x409/product maple-donut
+    mkdir /config/usb_gadget/g1/configs/b.1 0770 shell shell
+    mkdir /config/usb_gadget/g1/configs/b.1/strings/0x409 0770 shell shell
+    write /config/usb_gadget/g1/configs/b.1/strings/0x409/configuration adb
+    mkdir /config/usb_gadget/g1/functions/ffs.adb
+    symlink /config/usb_gadget/g1/functions/ffs.adb /config/usb_gadget/g1/configs/b.1/f1
+
+on init
+    mkdir /dev/usb-ffs 0770 shell shell
+    mkdir /dev/usb-ffs/adb 0770 shell shell
+    mount functionfs adb /dev/usb-ffs/adb uid=2000,gid=2000
+
+on init
+    write /cache/dnut-05-functionfs-block ok
+    write /dev/kmsg dnut-05-functionfs-block-done
+
+# usbudc binds the UDC once adbd's FunctionFS is ready and keeps it bound.
+# NOTE: Donut's /system/bin/sh has NO [ / test ("[: not found"), so every
+# script started this way must avoid [ ... ] conditionals - see the header
+# of sbin/usbudc.sh for the constructs that do work (command statuses with
+# && / ||, cmp, $(( )), while/if/case...).
+service usbudc /system/bin/sh /sbin/usbudc.sh
+    disabled
+
+# ---------------------------------------------------------------------------
+# vtouch: the clearpad touchscreen (input event7 on this kernel) streams
+# protocol type-A multi-touch (ABS_MT_POSITION_X/Y + TRACKING_ID groups) and
+# declares NO BTN_TOUCH/ABS_X/ABS_Y — Donut predates multi-touch entirely, so
+# EventHub classifies the node as keyboard-only and drops every touch. vtouch
+# reads the real node, creates a single-touch uinput device
+# ("maple_vtouch"), and renames it over /dev/input/event7 so the framework
+# sees a classic single-touch screen. Started with class default, i.e. before
+# system_server opens the input devices; it retries until the node appears.
+# ---------------------------------------------------------------------------
+# `disabled`: started explicitly in init.rc `on boot`, BEFORE class_start
+# default, so the virtual device replaces event7 before system_server's
+# EventHub opens the input devices (otherwise touch is dropped).
+service vtouch /sbin/maple_vtouch /dev/input/event7
+    disabled
+
+# Donut runs SurfaceFlinger inside system_server (system uid), and the
+# ueventd static table ships /dev/graphics/ as root:graphics 0660 — the
+# framework cannot open fb0 without this (cooper does the same). The node
+# exists by the time `on init` runs (ueventd coldboot precedes it), and this
+# is before zygote/system_server.
+on init
+    chmod 0666 /dev/graphics/fb0
