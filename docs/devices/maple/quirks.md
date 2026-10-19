@@ -2143,3 +2143,71 @@ Next actions (checkboxes for the log):
     port could not play video either; with the XML shipped, both are
     verified (above). A KitKat port that has no OEM codec list must
     supply its own.
+
+- [ ] TEST 53 (WiFi bringup — modem restart loop, 2026-10-19, IN PROGRESS):
+  the modem (MSM8998 PIL `pil-q6v5-mss 4080000.qcom,mss`) asserts its
+  err-fatal line via **smp2p bit 0 of the `slave-kernel` entry (modem→AP
+  SSR channel)** every **41.36 s** (`subsys-restart: Restart sequence
+  requested for modem, restart_level = RELATED.`), so `wlan0` never
+  appears (icnss reports `recovery.root_pd_crash` climbing, all WLFW QMI
+  counters stay 0). Verified on-device (`maplekk`, `sys.boot_completed=1`).
+  - **Root cause of the restart (identified).** The first kernel line at
+    each cycle is `modem subsystem failure reason: (unknown,
+    smem_get_entry_no_rlock failed).` — that print comes from
+    `log_modem_sfr()` in `pil-q6v5-mss.c`, called only from
+    `restart_modem()`, which is called only from
+    `modem_err_fatal_intr_handler` (the PIL's err-fatal IRQ) and
+    `modem_wdog_bite_intr_handler`. The wdog handler would print
+    "Watchdog bite received from modem software!" (it doesn't), and its
+    IRQ count is 0, so the path is the **err-fatal IRQ handler** running
+    silently: the modem's FW asserts err-fatal (via smp2p bit 0) and the
+    AP just collects the (empty) SSR reason and restarts it. The SFR
+    SMEM item (`SMEM_SSR_REASON_MSS0`) is never written → no SFR string
+    → consistent with a **watchdog bite / boot-time handshake timeout in
+    the modem FW**, not an AP-side crash. The modem's err-fatal IRQ is
+    delivered over smp2p (GPIO 709 = bit 0 of `slave-kernel`, remote-pid
+    1): its count rises +1 per cycle, and raising the AP-side
+    `master-kernel` bit 0 (GPIO 677, the SSR ack) to 1 makes the modem
+    crash immediately (3.16 s cadence) — confirming bit 0 is the SSR ack,
+    not a "boot complete" signal. Reverting restores 41.36 s.
+  - **AP-side ruled out.** All A15 64-bit daemons run in situ (per
+    process `LD_LIBRARY_PATH=/system/lib64:/vendor/lib64`) and the modem
+    still cycles: `rmt_storage` (EFS reads succeed, no writes),
+    `tftp_server` (RFS tree present, no requests observed),
+    `cnss-daemon -n -l`, `pd-mapper` (real `.jsn` tables, identical
+    cadence to the in-tree `pdserve` transcription), `irsc_util`. Extra
+    daemons (`port-bridge`, `netmgrd`, `imsqmidaemon`, `ta_qmi_service`,
+    `dpmQmiMgr`, `mlog_qmi_service`) also do not change the cadence.
+    Killing the service locator (no pd-mapper/pdserve) does not change
+    it. Opening SMD channels 7/8/11 does not change it. The kernel's
+    QMI clients (service-notifier → TMS inst 180, sysmon → SSCTL inst 18)
+    connect and ack the modem's SSCTL indications. SHM is not configured
+    for the modem. The modem's err-fatal is therefore **internal to the
+    modem FW**.
+  - **Ramdump collection did not work.** `enable_ramdumps=1` was set at
+    runtime and `/dev/ramdump_modem` + `/dev/ramdump_md_modem` were held
+    open, but no `Ramdump(ramdump_modem)`/`Ramdump(ramdump_md_modem)`
+    message appeared and both files stayed 0 bytes — the modem's ramdump
+    callback (`modem_ramdump`) did not run (or took the minidump branch
+    without pushing). The modem's EFS (`modemst1`) is encrypted, and
+    Sony's `last_subsyslog` (`/proc/last_amsslog`) reports
+    "Could not read SMEM ID. NULL" (no SFR/log written). So the modem's
+    own log is not currently reachable.
+  - **Hypothesis (open).** The modem's FW (A15/Sony, `DEBUG1` flag in
+    `modem.mdt`) watchdog-bites ~41 s after boot on this port. The A15
+    AP differs in userspace (all daemons ruled out) and possibly in a
+    kernel feature the modem's FW depends on; candidates still to test:
+    (1) provide the missing AP-side "boot complete" signal (not smp2p
+    bit 0 — that is the SSR ack); (2) a QRTR-dependent QMI service the
+    legacy 4.4 IPC router lacks; (3) a minidump/ramdump collection path
+    that actually captures the modem's log. Until the modem stops
+    restarting, WLFW/`wlan0` cannot come up.
+  - **Next (verify-me):** (1) find the AP-side signal the modem waits
+    for (try toggling other smp2p `master-kernel` bits / check the
+    modem's DIAG via `/dev/diag`); (2) collect the modem's ramdump
+    (fix the minidump/ramdump path so `/dev/ramdump_md_modem` receives
+    data); (3) once the modem stays up, confirm WLFW QMI activity and
+    `wlan0`; (4) integrate `root64/**` into `full_maple.mk`
+    (`PRODUCT_COPY_FILES`), add init services with per-service env, the
+    `/dev/block/bootdevice` symlink, and the RFS boot script; rebuild,
+    flash, verify.
