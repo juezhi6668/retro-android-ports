@@ -1927,10 +1927,12 @@ Next actions (checkboxes for the log):
   - **Still open.** Capture calibration (DEC7 dmic route runs
     uncalibrated — TX calibration is accepted by the loader but kills the
     ADM, see TEST 51; TX app type 69937 / `Audio Stream Capture 0 App
-    Type Cfg` is wired but disabled by `MAPLE_TX_CAL`); a volume-key UI
-    click was not observed (no stream start at the key event — likely
-    needs the screen on; `audiotrack_test` covers the same framework
-    path); BT SCO stays known-dead (CHARQUIRKS).
+    Type Cfg` is wired but disabled by `MAPLE_TX_CAL`); BT SCO stays
+    known-dead (CHARQUIRKS). UI key clicks were silent for an unrelated
+    reason — no `media_codecs.xml`, so SoundPool could not decode
+    `Effect_Tick.ogg` — fixed and verified in TEST 52 (a hardware volume
+    key plays nothing in AOSP KitKat at all; the touch path is the one
+    that plays a sound effect).
 
 ## Bringup log: audio — framework capture, routing, TX calibration (2026-10-19)
 
@@ -2042,3 +2044,82 @@ Next actions (checkboxes for the log):
     then `python3 scripts/analyze-rec.py loop.raw` on the host after pulling
     it (raw S16_LE mono, 5.97 s → 440.00 Hz / rms 92–94 above).
 
+
+## Bringup log: media decode — the missing media_codecs.xml (2026-10-19)
+
+- **TEST 52 (owner: media parity — stock plays decoded audio, this port
+  did not; 2026-10-19):** **every compressed media format was silent
+  while raw PCM played: the image had no
+  `/system/etc/media_codecs.xml`.** Found while chasing the UI click
+  (a nav-bar tap): the click path itself is correct (`KeyButtonView` →
+  `AudioManager.playSoundEffect` → AudioService's SoundPool), but
+  SoundPool reported `Unable to load sample: (null)` and
+  `onLoadSoundEffects(), Error -22 while loading samples`; Music's
+  AudioPreview on the same kind of ogg ringtone reported
+  `MediaPlayer: error (1, -2147483648)` = `MEDIA_ERROR_UNKNOWN` +
+  `UNKNOWN_ERROR` (0x80000000, `utils/Errors.h`). (Hardware volume keys
+  play no sound in AOSP KitKat — the old "volume-key click not
+  observed" note was a red herring; the touch path is the one to test.)
+  - **Why raw worked and compressed did not.**
+    `AwesomePlayer::initAudioDecoder` bypasses OMX for `audio/raw`
+    (`mAudioSource = mAudioTrack`), so WAV (WAVExtractor → audio/raw)
+    played normally — the HAL opened for it (`route out 0x2 -> speaker
+    (acdb 15)`, cal loaded), which is also why the earlier "speaker
+    playback works" checks passed. ogg/mp3 need `OMXCodec::Create`; it
+    returned NULL for every compressed MIME.
+  - **Root cause.** This 4.4.4 tree's `OMXCodec::findMatchingCodecs`
+    asks `MediaCodecList`, which `fopen`s **`/etc/media_codecs.xml`**
+    (`frameworks/av/media/libstagefright/MediaCodecList.cpp`). If the
+    file is missing it logs `MediaCodecList: unable to open media codecs
+    configuration xml file.` (ALOGW — the only line that reached dmesg)
+    and `initCheck()` stays `NO_INIT`, so `getInstance()` returns NULL;
+    `findMatchingCodecs` leaves the vector empty and `OMXCodec::Create`
+    returns NULL with `No matching codecs!` logged at **ALOGV** — which
+    `-DNDEBUG` compiles out, so the failure is silent at default log
+    level. Our image had no `/system/etc/media_codecs.xml`: AOSP ships
+    one only for goldfish/sdk
+    (`device/generic/goldfish/camera/media_codecs.xml`, pulled in by
+    `sdk.mk`), and `full_maple.mk` wrongly assumed it "ships with the
+    stock build".
+  - **The two error codes are the same failure at two layers.** Music's
+    MediaPlayer surfaces `initAudioDecoder` → `UNKNOWN_ERROR` (log
+    `error (1, -2147483648)`); SoundPool's decode goes through
+    `MediaPlayerService::decode` → `AudioCache::notify` records
+    `MEDIA_ERROR`/`UNKNOWN_ERROR`, `cache->wait()` then fails and decode
+    returns `BAD_VALUE` (-22) — hence `Error -22` from AudioService while
+    the same dmesg window shows `AudioCache: Error 1, -2147483648
+    occurred`.
+  - **Fix.** New `devices/maple/kitkat/media/media_codecs.xml` lists the
+    `OMX.google.*` components that `SoftOMXPlugin` provides and this
+    image builds (17 `libstagefright_soft_*.so`; the soft MPEG4 library
+    supplies both `mpeg4` and `h263`, `vpxdec` supplies vp8+vp9; the raw
+    decoder is not listed because `MediaCodecList` adds it itself).
+    `full_maple.mk` installs it as `/system/etc/media_codecs.xml`
+    (`/etc` is the usual symlink to `/system/etc`, checked on-device).
+  - **Verified on the flashed image (2026-10-19).** boot.img
+    `0b0e750db3d6b6381d1e17f95e89af8c`, sparse system
+    `f8ab40bee62442f96b55f5cecb369061`, TWRP raw readback
+    `ab879f3b082338fc838d1818055d3536` (TWRP reported `ALL VERIFIED`).
+    - **MP3:** Music's `AudioPreview` on `file:///sdcard/test440.mp3`
+      (an ffmpeg 440 Hz sine) → HAL `route out 0x2 -> speaker (acdb
+      15)`, topology `112fc`, no `MediaPlayer: error`; the DMIC loopback
+      of it (`audiorecord_test 5 48000`, analysed with
+      `scripts/analyze-rec.py`) reads **440.00 Hz** over 0.00–2.25 s
+      (rms 48.9→18.9).
+    - **OGG:** `ANDROMEDA.ogg` from `/system/media/audio/ringtones`
+      through the same AudioPreview → same route/cal, no error.
+    - **UI click:** a nav-bar tap in Settings now opens a HAL stream
+      (`route out 0x2 -> speaker (acdb 15)`) and logs neither
+      `SoundPool: Unable to load sample` nor `onLoadSoundEffects(),
+      Error -22` (both were the pre-fix symptom).
+    - The first flash attempt aborted mid-way when TWRP dropped off USB
+      for ~10 minutes; the battery read 100 % when TWRP came back, so
+      that was a TWRP/USB crash, not a low battery. The second run
+      flashed and verified cleanly.
+  - **Port implication.** The "speaker audio" status the port carried
+    was *raw-PCM-only*: ringtones, notification/alarm sounds, UI clicks
+    and music (all ogg/mp3 in KitKat) could never play. The same missing
+    file also disables *video* decode (no h264/vpx components), so video
+    playback was impossible too — the XML enables the software
+    decoders, but whether the port's video output path survives is a
+    separate [verify-me] test.

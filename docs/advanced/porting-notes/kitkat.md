@@ -663,6 +663,46 @@ TEST 50; the HAL is
   `acdb_device_table[]`), but mark the headset-mic path verify-me until a
   jack source exists.
 
+## Media decode lessons (maple, 2026-10-19)
+
+- **A KitKat product must supply `/system/etc/media_codecs.xml`.** The
+  4.4 `OMXCodec` asks `MediaCodecList`, which parses that file; AOSP ships
+  one only for goldfish/sdk
+  (`device/generic/goldfish/camera/media_codecs.xml`, pulled in by
+  `sdk.mk`), not for real products. Without it `initCheck()` stays
+  `NO_INIT`, `getInstance()` returns NULL, `findMatchingCodecs` stays
+  empty and `OMXCodec::Create` returns NULL for **every** compressed
+  MIME. The only dmesg evidence is
+  `MediaCodecList: unable to open media codecs configuration xml file.`
+  (ALOGW); the decisive `No matching codecs!` is ALOGV, compiled out by
+  `-DNDEBUG`.
+- **"Audio works" can mean raw PCM only.** `AwesomePlayer::initAudioDecoder`
+  bypasses OMX for `audio/raw` (`mAudioSource = mAudioTrack`), so WAV
+  plays (extractor + HAL only) while ogg/mp3/aac are silent. Test one
+  compressed file before claiming media support. The failure surfaces as
+  `UNKNOWN_ERROR` (0x80000000, java log `error (1, -2147483648)`) and,
+  for SoundPool, as `onLoadSoundEffects(), Error -22 while loading
+  samples` — `MediaPlayerService::decode`/`AudioCache` map the same
+  player error to `BAD_VALUE` (-22).
+- **List the components `SoftOMXPlugin` actually provides.** The table in
+  `frameworks/av/media/libstagefright/omx/SoftOMXPlugin.cpp` is the truth
+  (component → library + role): the soft MPEG4 library registers both
+  `OMX.google.mpeg4.decoder` and `OMX.google.h263.decoder`, `vpxdec` both
+  vp8/vp9. Don't copy a newer device's `media_codecs.xml`: its qcom
+  component names have no KitKat OMX core behind them on this port.
+  `OMX.google.raw.decoder` is added by `MediaCodecList` itself, so
+  listing it again duplicates it.
+- **The same gap disables video decode** (h264/vpx components only exist
+  through the XML), so a port without one cannot play video either —
+  worth knowing before debugging the video *output* path.
+- **Verified on maple 2026-10-19** with
+  `devices/maple/kitkat/media/media_codecs.xml` (21 `OMX.google.*`
+  components, matching the 17 soft-codec libraries in the image): Music's
+  AudioPreview plays mp3 and ogg through the HAL (route + acdb, no
+  `MediaPlayer: error`), a DMIC loopback of a 440 Hz mp3 reads 440.00 Hz,
+  and a UI click plays with no SoundPool error. Maple TEST 52. Video
+  output with the now-enabled software decoders is still untested.
+
 ## Newer userspace beside the old one (taimen; assessed for maple)
 
 Taimen's port runs a 64-bit Android 11 chroot (`/system/v11`) next to

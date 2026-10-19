@@ -53,6 +53,7 @@ PRODUCT_COPY_FILES += \
     vendor/sony/maple/wifi/WCNSS_qcom_cfg.ini:system/vendor/firmware/wlan/qca_cld/WCNSS_qcom_cfg.ini \
     vendor/sony/maple/audio/audio_policy.conf:system/etc/audio_policy.conf \
     vendor/sony/maple/audio/mixer_paths_tasha.xml:system/etc/mixer_paths_tasha.xml \
+    vendor/sony/maple/media/media_codecs.xml:system/etc/media_codecs.xml \
     frameworks/native/data/etc/android.hardware.wifi.xml:system/etc/permissions/android.hardware.wifi.xml
 # adsp + wlan calibration/BDF firmware blobs (modem `image/adsp.*`,
 # `image/bdwlan.*`, persist `wlan/wlan_mac.bin` — inventoried live
@@ -68,7 +69,12 @@ PRODUCT_COPY_FILES += \
 
 # audio.primary.maple (tinyalsa HAL) + sound recorder jni (CHARQUIRKS:
 # "sound recorder needs libsrec_jni in PRODUCT_PACKAGES or it crashes").
-# media_codecs.xml ships with the stock build (software codecs) — kept.
+# media_codecs.xml is product-supplied: KitKat's MediaCodecList reads
+# /etc/media_codecs.xml and AOSP only ships one for goldfish/sdk, so without
+# it OMXCodec::Create finds no codec at all and every compressed format fails
+# with UNKNOWN_ERROR — silently at default log level ("No matching codecs!"
+# is ALOGV). Only raw PCM/WAV played before. See media/media_codecs.xml and
+# quirks TEST 52.
 PRODUCT_PACKAGES += \
     audio.primary.maple \
     libsrec_jni

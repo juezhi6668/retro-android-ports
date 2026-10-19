@@ -29,7 +29,7 @@ is the oldest release that can still be synced. The full story — and why a
 | Device | Codename | Ports | Status |
 | --- | --- | --- | --- |
 | Samsung Galaxy Ace GT-S5830/L/T | `cooper` | Donut 1.6 (DRD35) | Boots on-device; launcher, touchscreen + capacitive keys, 160 dpi display, speaker audio. Cellular impossible (no Donut RIL for MSM7227); camera preview is test-pattern only. [Device page](docs/devices/cooper/README.md) |
-| Sony Xperia XZ Premium G8141/G8142 | `maple` | KitKat 4.4.4 (KTU84Q) | Boots to UI; touch, display, USB adb, hardware GL/GLES 3.2 (Adreno 540 in-process via libhyb, 59–60 fps, verified 2026-10-19), brightness/sleep, emulated storage, **playback + capture + headset/headphone routing through the audio HAL** (ACDB calibration from the Android 15 loader, in-process via libhyb; routing driven by AudioPolicyManager's `routing=`; verified 2026-10-19). WiFi interface still open: SERVREG_LOC now served in-tree by `pdserve` and the PDR chain (icnss) registers its notifier, but the modem root PD crashes every ~41 s before wlan_pd/WLFW can start (modem stability/keepalive open). [Device page](docs/devices/maple/README.md) |
+| Sony Xperia XZ Premium G8141/G8142 | `maple` | KitKat 4.4.4 (KTU84Q) | Boots to UI; touch, display, USB adb, hardware GL/GLES 3.2 (Adreno 540 in-process via libhyb, 59–60 fps, verified 2026-10-19), brightness/sleep, emulated storage, **playback + capture + headset/headphone routing through the audio HAL** (ACDB calibration from the Android 15 loader, in-process via libhyb; routing driven by AudioPolicyManager's `routing=`; verified 2026-10-19; decoded ogg/mp3 too — TEST 52, a DMIC loopback of a 440 Hz mp3 reads 440.00 Hz). WiFi interface still open: SERVREG_LOC now served in-tree by `pdserve` and the PDR chain (icnss) registers its notifier, but the modem root PD crashes every ~41 s before wlan_pd/WLFW can start (modem stability/keepalive open). [Device page](docs/devices/maple/README.md) |
 | Sony Xperia XZ Premium G8141/G8142 | `maple` | Donut 1.6 (DRD35) | Boots to launcher; touch (stable from ~6.5 s, `vtouch` v1.2.0-maple3), tap-to-unlock keyguard, camera half-press → BACK / full-press → MENU, volume keys, readable key character maps (Settings works), portrait orientation. No audio/WiFi/cellular/camera HAL yet. [Device page](docs/devices/maple/README.md) |
 | Sony Xperia XZ1 G8341/G8342 | `poplar` | KitKat 4.4.4 (KTU84Q) | Boots to UI (launcher + nav bar, touch, display, USB adb, HW GL via glrenderd). Same yoshino/MSM8998 platform as maple; tree predates maple TEST 36-37. [Device page](docs/devices/poplar/README.md) |
 
@@ -147,6 +147,16 @@ Each release has its own end-to-end guide; the README stays short:
       nav bar with touch, display, USB adb, HW GL via glrenderd (Oct 2026,
       sherm port — tree committed as `devices/poplar/kitkat/`, predates maple
       TEST 36-37).
+- [x] maple media decode (TEST 52): the image was missing
+      `/system/etc/media_codecs.xml`, so `MediaCodecList` returned no codecs
+      and every compressed format failed (ogg/mp3 system sounds, ringtones,
+      music; WAV worked only because `audio/raw` bypasses OMX). Now shipped
+      from `devices/maple/kitkat/media/media_codecs.xml` and verified
+      2026-10-19: Music plays mp3/ogg through the HAL with cal, a DMIC
+      loopback of a 440 Hz mp3 reads 440.00 Hz, UI clicks play.
+- [ ] maple video decode: the software h264/vpx/mpeg4 decoders are enabled
+      by the same XML (video decode was impossible before it) — test a clip
+      on the existing GL/display path.
 - [ ] maple audio leftovers: a `h2w`-style jack switch in the kernel (the
       tasha codec registers only `hdmi`/`lid`/`sim_detect`), so
       `WiredAccessoryManager` can route headphones/headset mic by itself; a
