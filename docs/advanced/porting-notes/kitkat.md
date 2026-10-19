@@ -602,7 +602,66 @@ TEST 50; the HAL is
 - **A framework-level probe is worth its build time.** A tiny in-tree
   `AudioTrack` tool (`audiotrack_test`, built by the device tree) exercises
   AudioFlinger → HAL, which a tinyalsa tool cannot; pair it with a capture
-  and check the tone's energy band, not just "is there sound".
+  and check the tone's energy band, not just "is there sound". The
+  capture sibling (`audiorecord_test`, same directory) records through
+  AudioFlinger into raw S16_LE and prints per-second peak/rms; play a tone
+  and record it at the same time (`audiotrack_test 8 48000 0.8 & sleep 1;
+  audiorecord_test 6 48000 /data/local/tmp/loop.raw; wait`) for an
+  end-to-end loopback, analysed on the host with
+  [`scripts/analyze-rec.py`](../../../scripts/analyze-rec.py) (peak/rms,
+  dominant frequency, stutter sidebands; needs numpy).
+- **`ACDB_DEV_TYPE_IN` is 2 in this era, not 0.** The qcom HAL header
+  (`hardware/qcom/audio/hal/audio_hw.h`) defines `ACDB_DEV_TYPE_OUT 1` and
+  `ACDB_DEV_TYPE_IN 2`; sending TX calibration with 0 makes the loader log
+  `ACDB -> Device is not RX or TX!acdb_id = %d` and return a non-zero
+  rejection (65–67), while the same ids with 2 return 0 and push blocks.
+  The loader's device list is a hardcoded RX/TX table, not a free-form id:
+  speaker 15, headphones 10 and speaker+headphones 799 are the RX entries,
+  and the mic family 4 (handset), 8 (headset), 6, 9, 35, 131, 143, 152 all
+  go through with dev_type 2. Scan it before trusting a guess —
+  `acdbtest --scan` — but know that its TX sends load blocks that kill
+  capture until reboot (next bullet) and that it needs the boot's first
+  framework stream *not* to have happened yet (one loader per boot; a
+  second init dies in `cal_block_ion_alloc: audio ION import failed,
+  rc = -22` → `-12`).
+- **Only one process can have the ACDB loader initialized per boot.** After
+  mediaserver has loaded blocks, a second `acdb_loader_init_v2` in another
+  process dies in `cal_block_ion_alloc: audio ION import failed, rc = -22`
+  → `voice_alloc_cal … failed` → init `-12`, and the first process keeps
+  the blocks. Diagnostic tools that drive the loader themselves must run
+  on a fresh boot (before the first framework stream), or expect `-12`.
+- **TX calibration can poison capture for the rest of the boot.** On maple
+  the loader accepts acdb 4 (`send_audio_cal, acdb_id = 4, path = 1, …
+  Topology Id 112fb`) but every following capture prepare dies: with the
+  HAL's own send it is the ADM (`adm_callback: cmd = 0x10326 returned
+  error = 0x1`, `msm_pcm_routing_reg_phy_stream: adm open failed
+  copp_idx:-131`, `msm_pcm_capture_prepare: stream reg failed ret:-22`,
+  `ASoC: platform prepare error: -22`), with a bare loader send and no
+  capture app-type cfg the SLIM TX backend gives up instead
+  (`msm-dai-q6-sb-0-tx: ASoC: cpu DAI prepare error: -131`,
+  `SLIMBUS_0_TX: ASoC: backend prepare failed -131`) — either way
+  `AudioRecord` hangs and a tinyalsa capture fails identically, so it is
+  the cal blocks, not the HAL. `kill -9 mediaserver` does not free them —
+  reboot only, so any TX-cal experiment (including `acdbtest --scan`)
+  belongs at the end of a session. Keep capture uncalibrated until the
+  ADM topology mismatch is understood; the RX side is unaffected (acdb
+  15/10 carry topology `112fc` and play fine).
+- **`routing=` is a signed int.** KitKat's policy sends it with
+  `param.addInt(String8(AudioParameter::keyRouting), (int)newDevice)`
+  (`hardware/libhardware_legacy/audio/AudioPolicyManagerBase.cpp`), so
+  `AUDIO_DEVICE_IN_*` values arrive negative (0x80000004 → -2147483644).
+  Parse with `str_parms_get_int` and cast the int back to `uint32_t`; a
+  `%u` sender overflows to `0x7fffffff` (INT_MAX) instead.
+- **Jack routing needs a switch-class node the kernel may not create.**
+  KitKat's `WiredAccessoryManager` watches
+  `/sys/class/switch/h2w/state`; if the codec driver only registers
+  `hdmi`/`lid`/`sim_detect` (maple's tasha kernel does), nothing ever
+  sends `routing=` for a plugged headset, and an app cannot force the
+  *input* device either because the policy re-sends its own input routing
+  at `startInput`. Build the route switch and its acdb ids anyway (RX
+  headphones 10, TX headset mic 8 from `platform.c`'s
+  `acdb_device_table[]`), but mark the headset-mic path verify-me until a
+  jack source exists.
 
 ## Newer userspace beside the old one (taimen; assessed for maple)
 

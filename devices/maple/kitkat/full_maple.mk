@@ -122,6 +122,7 @@ PRODUCT_PACKAGES += \
     hybtest \
     acdbtest \
     audiotrack_test \
+    audiorecord_test \
     rtc-restore \
     lights.maple \
     pdserve

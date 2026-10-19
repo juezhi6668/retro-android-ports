@@ -15,6 +15,10 @@
  *                                   resident so the cal blocks survive
  *   acdbtest --app-type N --rate N  app-type/rate for --v3
  *   acdbtest --card NAME --cvd VER  override card / cvd version
+ *   acdbtest --scan                 one init, then report which RX/TX
+ *                                   acdb ids this loader accepts (the TX
+ *                                   sends poison capture until reboot —
+ *                                   run it last)
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -36,10 +40,12 @@ int main(int argc, char **argv)
     acdb_init_v2_t init;
     acdb_send_cal_t send;
     int r, i, use_v3 = 0, app_type = 69936, rate = 48000, idx = 0, hold = 0;
+    int scan = 0;
 
     for (i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--init-only")) init_only = 1;
         else if (!strcmp(argv[i], "--hold")) hold = 1;
+        else if (!strcmp(argv[i], "--scan")) scan = 1;
         else if (!strcmp(argv[i], "--send") && i + 2 < argc) { id = atoi(argv[++i]); type = atoi(argv[++i]); }
         else if (!strcmp(argv[i], "--v3")) use_v3 = 1;
         else if (!strcmp(argv[i], "--app-type") && i + 1 < argc) app_type = atoi(argv[++i]);
@@ -70,6 +76,40 @@ int main(int argc, char **argv)
             printf("holding ACDB open (pid %d)\n", getpid());
             for (;;) pause();
         }
+        return 0;
+    }
+
+    /* --scan: which acdb ids does this loader actually accept? The check
+     * inside libacdbloader is a hardcoded RX/TX table ("Device is not RX
+     * or TX!acdb_id = %d" is logged for anything else), and older qcom
+     * HALs pass ids this Android 15 build no longer knows. One loader
+     * init, then every id in turn; send_audio_cal_v3's return value is
+     * the answer (0 = the loader mapped it and pushed blocks).
+     * RX (dev_type 1, app type 0x11130): speaker/headset editions of the
+     * routes this port uses; TX (dev_type 2 — ACDB_DEV_TYPE_IN in
+     * hardware/qcom/audio/hal/audio_hw.h, 0 is rejected, 0x11131): the
+     * mic family. Careful: the TX sends that come back 0 push real
+     * blocks; on msm8998 that kills capture prepare until reboot (see
+     * docs/devices/maple/quirks.md TEST 51), so run a scan last. */
+    if (scan) {
+        static const int rx[] = { 15, 10, 799 };
+        static const int tx[] = { 4, 8, 9, 6, 35, 131, 143, 152 };
+        acdb_send_cal_v3_t send3 = (acdb_send_cal_v3_t)hyb_dlsym(h, "acdb_loader_send_audio_cal_v3");
+        size_t k;
+        if (!send3) { printf("no send_audio_cal_v3\n"); return 1; }
+        for (k = 0; k < sizeof(rx) / sizeof(rx[0]); k++) {
+            r = send3(rx[k], 1, 0x11130, rate, 0);
+            printf("RX acdb_id=%-4d dev_type=1 app=0x11130 -> %d %s\n", rx[k], r,
+                   r ? "(rejected)" : "(accepted)");
+        }
+        for (k = 0; k < sizeof(tx) / sizeof(tx[0]); k++) {
+            r = send3(tx[k], 2, 0x11131, rate, 0);
+            printf("TX acdb_id=%-4d dev_type=2 app=0x11131 -> %d %s\n", tx[k], r,
+                   r ? "(rejected)" : "(accepted)");
+        }
+        /* what the pre-fix HAL sent, for the record */
+        r = send3(4, 0, 0x11131, rate, 0);
+        printf("TX acdb_id=4    dev_type=0 app=0x11131 -> %d (the old bug)\n", r);
         return 0;
     }
 

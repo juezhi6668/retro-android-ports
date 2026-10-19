@@ -29,7 +29,7 @@ is the oldest release that can still be synced. The full story — and why a
 | Device | Codename | Ports | Status |
 | --- | --- | --- | --- |
 | Samsung Galaxy Ace GT-S5830/L/T | `cooper` | Donut 1.6 (DRD35) | Boots on-device; launcher, touchscreen + capacitive keys, 160 dpi display, speaker audio. Cellular impossible (no Donut RIL for MSM7227); camera preview is test-pattern only. [Device page](docs/devices/cooper/README.md) |
-| Sony Xperia XZ Premium G8141/G8142 | `maple` | KitKat 4.4.4 (KTU84Q) | Boots to UI; touch, display, USB adb, hardware GL/GLES 3.2 (Adreno 540 in-process via libhyb, 59–60 fps, verified 2026-10-19), brightness/sleep, emulated storage, **speaker playback + mic through the audio HAL** (ACDB calibration from the Android 15 loader, in-process via libhyb; verified 2026-10-19). WiFi interface still open: SERVREG_LOC now served in-tree by `pdserve` and the PDR chain (icnss) registers its notifier, but the modem root PD crashes every ~41 s before wlan_pd/WLFW can start (modem stability/keepalive open). [Device page](docs/devices/maple/README.md) |
+| Sony Xperia XZ Premium G8141/G8142 | `maple` | KitKat 4.4.4 (KTU84Q) | Boots to UI; touch, display, USB adb, hardware GL/GLES 3.2 (Adreno 540 in-process via libhyb, 59–60 fps, verified 2026-10-19), brightness/sleep, emulated storage, **playback + capture + headset/headphone routing through the audio HAL** (ACDB calibration from the Android 15 loader, in-process via libhyb; routing driven by AudioPolicyManager's `routing=`; verified 2026-10-19). WiFi interface still open: SERVREG_LOC now served in-tree by `pdserve` and the PDR chain (icnss) registers its notifier, but the modem root PD crashes every ~41 s before wlan_pd/WLFW can start (modem stability/keepalive open). [Device page](docs/devices/maple/README.md) |
 | Sony Xperia XZ Premium G8141/G8142 | `maple` | Donut 1.6 (DRD35) | Boots to launcher; touch (stable from ~6.5 s, `vtouch` v1.2.0-maple3), tap-to-unlock keyguard, camera half-press → BACK / full-press → MENU, volume keys, readable key character maps (Settings works), portrait orientation. No audio/WiFi/cellular/camera HAL yet. [Device page](docs/devices/maple/README.md) |
 | Sony Xperia XZ1 G8341/G8342 | `poplar` | KitKat 4.4.4 (KTU84Q) | Boots to UI (launcher + nav bar, touch, display, USB adb, HW GL via glrenderd). Same yoshino/MSM8998 platform as maple; tree predates maple TEST 36-37. [Device page](docs/devices/poplar/README.md) |
 
@@ -127,20 +127,32 @@ Each release has its own end-to-end guide; the README stays short:
       [Taimen daemon-chroot assessment](docs/advanced/taimen-kitkat-mapping.md)),
       cellular, camera, GPS, microSD; intermittent pre-userspace boot hang
       documented.
-- [x] maple audio: **playback through the framework works** (2026-10-19).
-      The Android 15 `libacdbloader` runs in mediaserver through libhyb and
-      the HAL declares the device acdb id + loads the matching blocks before
-      route/`pcm_open` (`acdb_stream_cal`); the yoshino acdbdata is staged
-      as `MTP` (what `/sys/devices/soc0/hw_platform` reports), and
+- [x] maple audio: **playback and capture through the framework work**
+      (2026-10-19). The Android 15 `libacdbloader` runs in mediaserver through
+      libhyb and the HAL declares the device acdb id + loads the matching
+      blocks before route/`pcm_open` (`acdb_stream_cal`); the yoshino acdbdata
+      is staged as `MTP` (what `/sys/devices/soc0/hw_platform` reports), and
       `pcm_write`/`pcm_read` now pass bytes, not frames. Audible AudioTrack
-      tone at 440 Hz, ~99 % of a DMIC loopback's band energy; quirks TEST 50.
-      Headset route / capture calibration still open; BT SCO known-dead.
+      tone at 440 Hz, ~99 % of a DMIC loopback's band energy; the same tone
+      recorded back through AudioRecord (new `audiorecord_test`) reads
+      440.00 Hz. The HAL honors AudioPolicyManager's `routing=` — speaker 15 /
+      headphones 10 (RX cal and stream verified), builtin mic 4 / headset mic
+      8 — but the kernel exposes no `h2w` switch so jack routing never
+      triggers by itself, and TX calibration is off on purpose (the loader
+      accepts it but the ADM then refuses every capture prepare until reboot);
+      quirks TEST 50/TEST 51. BT SCO known-dead.
 - [x] Generalize the layout/scripts for `devices/<codename>/<release>/`
       (cooper/donut + maple/kitkat share one sync script).
 - [x] KitKat 4.4.4 on `poplar` (sibling yoshino device): boots to launcher +
       nav bar with touch, display, USB adb, HW GL via glrenderd (Oct 2026,
       sherm port — tree committed as `devices/poplar/kitkat/`, predates maple
       TEST 36-37).
+- [ ] maple audio leftovers: a `h2w`-style jack switch in the kernel (the
+      tasha codec registers only `hdmi`/`lid`/`sim_detect`), so
+      `WiredAccessoryManager` can route headphones/headset mic by itself; a
+      fix or workaround for the ADM topology mismatch that makes TX
+      calibration poison capture (`copp_idx:-131`); BT SCO stays known-dead
+      (CHARQUIRKS).
 - [ ] Finish poplar: add `poplar` to `scripts/sync-device-tree.sh` (done in-tree
       — verify), forward-port maple TEST 36-37 (wifi supplicant services, adsp
       boot, dual-node lights, `service_locator.enable=0`), formalise GPU fixes

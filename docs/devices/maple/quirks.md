@@ -1924,9 +1924,121 @@ Next actions (checkboxes for the log):
     `full_maple.mk` inherits `frameworks/base/data/sounds/AllAudio.mk` —
     the image had no `/system/media/audio` at all, so there were no
     ringtones or UI effects.
-  - **Still open.** Headset/headphone route + acdb id 10 (the HAL always
-    declares speaker 15); capture calibration (DEC7 dmic route runs
-    uncalibrated, TX app type not sent); a volume-key UI click was not
-    observed (no stream start at the key event — likely needs the screen
-    on; `audiotrack_test` covers the same framework path); BT SCO stays
-    known-dead (CHARQUIRKS).
+  - **Still open.** Capture calibration (DEC7 dmic route runs
+    uncalibrated — TX calibration is accepted by the loader but kills the
+    ADM, see TEST 51; TX app type 69937 / `Audio Stream Capture 0 App
+    Type Cfg` is wired but disabled by `MAPLE_TX_CAL`); a volume-key UI
+    click was not observed (no stream start at the key event — likely
+    needs the screen on; `audiotrack_test` covers the same framework
+    path); BT SCO stays known-dead (CHARQUIRKS).
+
+## Bringup log: audio — framework capture, routing, TX calibration (2026-10-19)
+
+- **TEST 51 (owner: audio parity with
+  [DoomGuy41/Taimen-KitKat](https://github.com/DoomGuy41/Taimen-KitKat);
+  2026-10-19):** **capture through the framework works, the headphone
+  route + its calibration work, and TX (capture) calibration is
+  deliberately off.** `audiorecord_test` (new: AudioRecord →
+  AudioFlinger → `audio.primary.maple`) records the 440 Hz tone that
+  `audiotrack_test` plays through the same HAL: dominant frequency
+  **440.00 Hz** over 5.97 s, per-second `rms` 92–94 (peak 199–299), no
+  `cal_block` and no `adm_callback` errors. Solo capture of a quiet room
+  reads peaks 85–174 / rms 20–32. Verified on the flashed images
+  (boot.img `0b0e750db3d6b6381d1e17f95e89af8c`, sparse system.img
+  `9d11eb2cb5a5036f6d74413e9b7c59d5`, TWRP raw readback
+  `41f30fb19692367aab5f265ba00e3849`; TWRP md5s matched. The same checks
+  passed on the intermediate system `5ff353b7b6c5b3d5e2892cef76022553`).
+  - **`ACDB_DEV_TYPE_IN` is 2, not 0.** The magic 0 came from nowhere —
+    `hardware/qcom/audio/hal/audio_hw.h` (the KitKat qcom HAL in this
+    tree) defines `ACDB_DEV_TYPE_OUT 1` / `ACDB_DEV_TYPE_IN 2`. With 0 the
+    Android 15 loader logs `ACDB -> Device is not RX or TX!acdb_id = 4` and
+    `acdb_loader_send_audio_cal_v3` returns non-zero — 65 for that fresh
+    first id, 66/67 for others, and 66 for an id that already went
+    through with dev_type 2. With 2 the same call returns 0 and
+    the log shows `send_audio_cal, acdb_id = 4, path = 1, app id =
+    0x11131, sample rate = 48000` → `GET_AFE_TOPOLOGY_ID for adcd_id 4,
+    Topology Id 112fb` → `send_hw_delay : acdb_id = 4 path = 1`.
+  - **…but that TX calibration makes every capture prepare fail.** The
+    next `pcm_open(PCM_IN)` + prepare dies: when the HAL itself sent the
+    cal it is the ADM that gives up (`adm_callback: cmd = 0x10326
+    returned error = 0x1`,
+    `msm_pcm_routing_reg_phy_stream: adm open failed copp_idx:-131`,
+    `msm_pcm_capture_prepare: stream reg failed ret:-22`,
+    `msm-pcm-dsp … ASoC: platform prepare error: -22`); when only
+    `acdbtest --scan` sent it (no capture app-type cfg, HAL never opened
+    a capture) the SLIM TX backend fails instead
+    (`msm-dai-q6-sb-0-tx: ASoC: cpu DAI prepare error: -131`,
+    `SLIMBUS_0_TX: ASoC: backend prepare failed -131`). Either way
+    `AudioRecord` never gets data (the record hangs) and a plain
+    `tone_test cap` fails identically, so it is the cal blocks, not the
+    HAL; and they are **not** freed by `kill -9 mediaserver` — capture
+    stays dead until reboot (verified twice).
+    `audio_hw.c` therefore has `MAPLE_TX_CAL 0` with these logs in the
+    comment: capture runs uncalibrated (and works), the RX side is
+    unaffected (acdb 15/10 both carry topology `112fc`). Repro on a
+    scratch boot if you touch it: one `audiorecord_test` after enabling
+    TX cal, or one `acdbtest --scan`, is enough to poison capture for
+    that boot.
+  - **The loader's RX/TX device table is a hardcoded list.** New
+    `acdbtest --scan` (one loader init, then a batch of ids, documented
+    in the tool's own comment) on a fresh boot of the final image:
+    RX 15 (speaker), 10 (headphones), 799 (speaker+headphones) → all
+    return 0; TX 4 (handset mic), **8 (headset mic)**, 9, 6, 35, 131,
+    143, 152 → all return 0 with `dev_type=2`. `dev_type=0` (what the
+    port first sent) is rejected — `ACDB -> Device is not RX or TX!acdb_id
+    = %d` in the log, return 65/66/67 depending on the id and order.
+    **The scan's TX sends load real blocks, so they poison capture for
+    the rest of that boot** (the -131 SLIM TX failure above; playback is
+    unaffected) — run it last. Also **run the scan on a fresh boot,
+    before the first framework stream**: once mediaserver has
+    initialized the loader, a second `acdb_loader_init_v2` dies in
+    `cal_block_ion_alloc: audio ION import failed, rc = -22` →
+    `voice_alloc_cal … failed` → init `-12` (the first process keeps the
+    cal blocks, and they outlive it).
+  - **`routing=` is a signed int, and the policy re-sends it at
+    startInput.** `AudioPolicyManagerBase.cpp` uses
+    `param.addInt(String8(AudioParameter::keyRouting), (int)newDevice)`
+    (lines 235/476/1022), so input devices arrive as negative decimals
+    (0x80000004 → -2147483644) and must be parsed with
+    `str_parms_get_int` + a cast back to `uint32_t` (a `%u` sender
+    overflows to `0x7fffffff` — verified the hard way). The HAL now picks
+    the route from that value at stream open: speaker (acdb 15) or
+    headphones (acdb 10); builtin mic (4) or headset mic (8). RX ids come
+    from the vendor `audio_platform_info.xml`/`platform.c` table, TX ids
+    from `hardware/qcom/audio/hal/msm8974/platform.c`'s
+    `acdb_device_table[]` (`IN_HANDSET_MIC 4`, `IN_HEADSET_MIC 8` —
+    headset mic is **8**, not the 9 guessed from the 8974-era table).
+  - **`route out 0x8 -> headset (acdb 10)` verified.** `audiotrack_test 3
+    48000 0.5 8` sends `routing=8` through
+    `AudioSystem::setParameters(0, …)` the way the policy does on a jack
+    insert; the HAL logs the headset choice, applies the vendor
+    `headphones` path (RX INT1/RX2, `CLSH_DSM_OUT`, RX1/RX2 volume 76),
+    sends cal 10 (`Topology Id 112fc`), prepares and plays — no ADM
+    errors. Audibility still needs headphones on the owner's end
+    (nothing plugged = no load). The route only re-applies when the HAL
+    stream opens, so the test needs the previous output to go to standby
+    (~3 s); a second track started immediately reuses the running stream
+    and keeps the old route (observed).
+  - **No `h2w` switch exists, so the jack never routes itself.**
+    `/sys/class/switch/` holds `hdmi hdmi_audio lid sim_detect wfd`
+    only. KitKat's `WiredAccessoryManager` watches
+    `/sys/class/switch/h2w/state`, so nothing ever sends `routing=4/8`
+    on its own, and an app cannot force the *input* device either: the
+    policy re-sends its own input routing at `startInput`
+    (`dev routing=0x80000010 (in)` immediately followed by
+    `in routing=0x80000004` → builtin mic). The `headset-mic` path
+    (`adc2` → DEC0 → SLIM TX0) is written and compiles into the route
+    switch but is **unexercised** — verify-me once the kernel exposes a
+    jack source (wcd-mbhc switch/extcon bridge).
+  - **Runner tools.** `audiorecord_test [seconds] [rate] [file]
+    [routing]` is the capture sibling of `audiotrack_test` (raw S16_LE
+    mono + per-second peak/rms, routing optional); `audiotrack_test
+    [seconds] [rate] [volume] [routing]` gained the routing argument;
+    both are in the image and set the routing *after* constructing the
+    track/record (openOutput/openInput would otherwise overwrite it) and
+    *before* start/write (the HAL opens the PCM lazily on the first
+    buffer). Loopback recipe:
+    `adb shell 'audiotrack_test 8 48000 0.8 & sleep 1; audiorecord_test 6 48000 /data/local/tmp/loop.raw; wait'`
+    then `python3 scripts/analyze-rec.py loop.raw` on the host after pulling
+    it (raw S16_LE mono, 5.97 s → 440.00 Hz / rms 92–94 above).
+

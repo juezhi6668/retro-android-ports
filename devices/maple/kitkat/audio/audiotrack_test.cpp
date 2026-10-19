@@ -6,16 +6,26 @@
  * calibration and writes the speaker route. Speaker output is the check that
  * matters; pair it with tone_test's mic capture for an acoustic loopback.
  *
- * usage: audiotrack_test [seconds] [rate] [volume]
+ * usage: audiotrack_test [seconds] [rate] [volume] [routing]
  *        audiotrack_test 0            (silence / route only)
+ *        audiotrack_test 3 48000 1 8  (route the output to the headphones)
+ *
+ * routing is an audio_devices_t value sent through
+ * AudioSystem::setParameters(0, "routing=N") exactly like
+ * AudioPolicyManager does when a wired headset is plugged in:
+ * 2 = speaker, 8 = wired headphone, 4 = wired headset. With no h2w
+ * switch in this kernel nothing sends it on its own.
  */
+#include <media/AudioSystem.h>
 #include <media/AudioTrack.h>
 #include <system/audio.h>
 #include <utils/Log.h>
+#include <utils/String8.h>
 
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 using namespace android;
 
@@ -24,6 +34,7 @@ int main(int argc, char **argv)
     int seconds = argc > 1 ? atoi(argv[1]) : 3;
     uint32_t rate = argc > 2 ? (uint32_t)atoi(argv[2]) : 48000;
     float volume = argc > 3 ? (float)atof(argv[3]) : 1.0f;
+    uint32_t routing = argc > 4 ? (uint32_t)strtoul(argv[4], NULL, 0) : 0;
     sp<AudioTrack> track = new AudioTrack(AUDIO_STREAM_MUSIC, rate,
                      AUDIO_FORMAT_PCM_16_BIT, AUDIO_CHANNEL_OUT_STEREO, 0,
                      AUDIO_OUTPUT_FLAG_NONE);
@@ -31,6 +42,13 @@ int main(int argc, char **argv)
     if (st != NO_ERROR) {
         fprintf(stderr, "AudioTrack init failed: %d\n", st);
         return 1;
+    }
+    /* After construction: openOutput hands the HAL the framework's device
+     * set, so a routing set before this would be overwritten. The HAL
+     * applies the route when the PCM opens on the first write. */
+    if (routing) {
+        status_t rs = AudioSystem::setParameters(0, String8::format("routing=%d", (int)routing));
+        printf("AudioSystem::setParameters(routing=0x%x) -> %d\n", routing, rs);
     }
     track->setVolume(volume);
     track->start();

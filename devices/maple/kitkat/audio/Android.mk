@@ -14,13 +14,23 @@ LOCAL_SHARED_LIBRARIES := liblog libcutils libtinyalsa libhyb
 LOCAL_MODULE_TAGS := optional
 include $(BUILD_SHARED_LIBRARY)
 
-# Framework-level audio check: AudioTrack -> AudioFlinger -> this HAL (the
-# tinyalsa tools in tools/ bypass the HAL entirely). Pushed by the build to
-# /system/bin; run as root: audiotrack_test 5.
+# Framework-level audio checks: AudioTrack/AudioRecord -> AudioFlinger ->
+# this HAL (the tinyalsa tools in tools/ bypass the HAL entirely). Pushed by
+# the build to /system/bin; run as root:
+#   audiotrack_test 5              (speaker tone)
+#   audiorecord_test 5 48000 /data/local/tmp/rec.raw
 include $(CLEAR_VARS)
 LOCAL_MODULE := audiotrack_test
 LOCAL_MODULE_TAGS := optional
 LOCAL_SRC_FILES := audiotrack_test.cpp
+LOCAL_C_INCLUDES := frameworks/av/include
+LOCAL_SHARED_LIBRARIES := libmedia libutils libbinder libcutils liblog
+include $(BUILD_EXECUTABLE)
+
+include $(CLEAR_VARS)
+LOCAL_MODULE := audiorecord_test
+LOCAL_MODULE_TAGS := optional
+LOCAL_SRC_FILES := audiorecord_test.cpp
 LOCAL_C_INCLUDES := frameworks/av/include
 LOCAL_SHARED_LIBRARIES := libmedia libutils libbinder libcutils liblog
 include $(BUILD_EXECUTABLE)

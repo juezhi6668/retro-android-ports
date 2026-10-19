@@ -203,6 +203,28 @@ under KitKat's linker or bionic. The playlist:
   `acdb_loader_init_v2` + `acdb_loader_send_audio_cal_v3`, and **keeps the
   handle for the life of mediaserver** — the cal blocks are dropped when the
   loader's `/dev/msm_audio_cal` fd closes, so a one-shot helper is not enough.
+  One loader per boot, too: once mediaserver holds the blocks a second init in
+  another process dies in `cal_block_ion_alloc: audio ION import failed, rc =
+  -22` → `voice_alloc_cal … failed` → `acdb_loader_init_v2 = -12`, so
+  diagnostic runs belong on a fresh boot.
+- The loader's device list is a **hardcoded table**, and TX ids need
+  `dev_type = ACDB_DEV_TYPE_IN = 2` (the vendor HAL declares `1`/`2` in
+  `hardware/qcom/audio/hal/audio_hw.h`); with `0` it logs `ACDB -> Device is
+  not RX or TX!acdb_id = %d` and returns a non-zero rejection (65–67).
+  Speaker 15, headphones 10 and speaker+headphones 799 are the RX entries;
+  the mic family 4 (handset), 8 (headset), 6, 9, 35, 131, 143, 152 all go
+  through with dev_type 2 (`acdbtest --scan`). The ids come from the qcom
+  legacy table (`hardware/qcom/audio/hal/msm8974/platform.c`), not from
+  the newer platform's `audio_platform_info.xml`.
+- Keep **TX (capture) calibration off** on msm8998 KitKat for now: the loader
+  takes acdb 4 and pushes `Topology Id 112fb`, after which every capture
+  prepare dies — in the ADM (`adm_callback: cmd = 0x10326 returned error =
+  0x1`, `adm open failed copp_idx:-131`, prepare `-22`) or at the SLIM TX
+  backend (`cpu DAI prepare error: -131`) depending on how the cal went in —
+  until reboot. The blocks outlive `kill -9 mediaserver`, and any TX send
+  triggers it, `acdbtest --scan` included. RX cal (15/10, topology `112fc`)
+  is unaffected. Details in the
+  [KitKat porting notes](../porting-notes/kitkat.md) and maple TEST 51.
 - Same staging tool: `stage.py` walks the `ACDB` root
   (`libacdbloader.so`) and its `DT_NEEDED` closure
   (`libaudcal`, `libacdbrtac`, `libacdb-fts`, `libadiertac`, `libmiscta`,
@@ -216,17 +238,25 @@ under KitKat's linker or bionic. The playlist:
   `/dev/msm_audio_cal` to `0660 media audio` (the driver's default is
   `root:root 0600` and mediaserver is uid `media`).
 - Verified end-to-end 2026-10-19: AudioTrack tone audible through the
-  framework HAL (99 % of the capture's band energy at 440 Hz), listener
-  script and failure modes in
-  [maple quirks](../../devices/maple/quirks.md) TEST 50 and the generic
-  lessons in the [KitKat porting notes](../porting-notes/kitkat.md).
+  framework HAL (99 % of the capture's band energy at 440 Hz), a framework
+  capture of that tone reading 440.00 Hz, and the headphone route + acdb 10
+  cal preparing and playing. Listener script and failure modes in
+  [maple quirks](../../devices/maple/quirks.md) TEST 50/TEST 51 and the
+  generic lessons in the [KitKat porting notes](../porting-notes/kitkat.md).
 
 Diagnostics that shipped with it: `acdbtest`
 (`devices/maple/kitkat/hyb/acdbtest.c`, in the image) drives the loader
-directly (`--init-only`, `--send ID TYPE`, `--v3 --hold 15 1` — the `--hold`
-form is the resident-fd proof), and `audiotrack_test`
+directly (`--init-only`, `--send ID TYPE`, `--scan` — which walks the loader's
+RX/TX table in one init, `--v3 --hold 15 1` — the `--hold` form is the
+resident-fd proof); `audiotrack_test`
 (`devices/maple/kitkat/audio/audiotrack_test.cpp`) plays a tone through
-AudioFlinger instead of tinyalsa.
+AudioFlinger instead of tinyalsa, and `audiorecord_test`
+(`devices/maple/kitkat/audio/audiorecord_test.cpp`) is the capture sibling —
+both take an optional `routing` argument applied the way
+AudioPolicyManager's jack handling does (`AudioSystem::setParameters(0,
+"routing=N")`). The host-side checker for a pulled capture is
+[`scripts/analyze-rec.py`](../../../scripts/analyze-rec.py) (peak/rms,
+dominant frequency, stutter sidebands; needs numpy).
 
 ## Building and staging
 
