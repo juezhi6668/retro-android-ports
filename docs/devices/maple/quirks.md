@@ -2265,6 +2265,92 @@ Next actions (checkboxes for the log):
     `last_subsyslog` (`/proc/last_amsslog`) reports "Could not read SMEM
     ID. NULL" (no SFR/log written), so the modem's own log is still not
     reachable this way.
+  - **2026-10-19 (late) — one cycle, timestamped end to end.** kmsg for
+    uptime 7420.6→7463.2: `Loading MBA and DP (if present)` → `MBA boot
+    done` → `Brought out of reset` (call it T0) → at **T0+0.134 s** the
+    four RMTFS opens, the `sysmon-qmi` SSCTL connect and `service-notifier:
+    root_service_service_arrive: Connection established between QMI handle
+    and 180 service` all land → the fs1/fs2 reads end at **T0+0.140 s** →
+    nothing → err-fatal at **T0+40.149 s** → next `Brought out of reset`
+    1.37 s later (boot-to-boot 41.52 s). `rmt_storage`'s own
+    `alloc_buff_cb: ... elapsed time(ms) is 41522 >= 5000` line is the
+    same interval from the daemon side. Everything the AP can see happen
+    from the modem is over within 150 ms of its boot; the locator query's
+    position in the cycle is still unmeasured (`pdserve` does not
+    timestamp).
+  - **2026-10-19 (late) — PDR chain audited end to end; the modem acks the
+    registration.** `service-notifier.c` walks the listener list in
+    `root_service_service_arrive()` every time a servreg notifier arrives
+    (i.e. every modem boot) and re-sends
+    `SERVREG_NOTIF_REGISTER_LISTENER_REQ {service_name, enable=1}` to it;
+    icnss registers from the locator's own answer
+    (`service_notif_register_notifier(domain_list[i].name,
+    domain_list[i].instance_id)`), i.e. with pdserve's `msm/modem/wlan_pd`
+    + instance 180 — identical to `modemuw.jsn`. The modem **answers**
+    that request: its `curr_state` field is what icnss logs as `PD service
+    notification: 0x7fffffff`, and `service-notifier.h` defines `UNINIT =
+    0x7fffffff`, `UP = 0x1fffffff`, `DOWN = 0x0fffffff`. So each boot the
+    modem's TMS is told a client wants wlan_pd, replies UNINIT, and never
+    brings it up before dying.
+  - **2026-10-19 (late) — the modem's DIAG subsystem never starts (LPASS
+    is the control case).** `/sys/kernel/debug/diag/status`: `p: MODEM
+    Feature: 00 00 |fbchmpqstu|` vs `p: LPASS Feature: 73 2e |FBCHMpQSTu|`.
+    Those flags are runtime-negotiated (`diag_debugfs.c`: F rcvd mask,
+    T sent mask, B buffering, C separate cmd/rsp, H hdlc, M mask
+    centralization, Q stm, S sockets, U untag); the modem has none of
+    them, the ADSP completed all of them. Matching evidence:
+    `socketinfo` shows `LPASS_CNTL` opened with 3889 B read / 60 B written
+    while `MODEM_CNTL` is opened with 0/0 and `MODEM_DATA` has
+    `fwd inited: -1`; the ADSP announces its diag CMD server `0x1001:0x41`
+    (LPASS base 64 + `INST_ID_CMD` 1, `diagfwd_socket.c`) and the modem
+    announces no `0x1001:0x1`; the mpss glink edge carries no DIAG/SMD
+    channels. So DIAG/QSH cannot interrogate the modem *because the
+    modem's own diag engine never runs* — not because the AP is missing a
+    channel. (Mechanics, for the record: plain `cat /dev/diag` reads
+    return EFAULT without the diag client setup; the transports including
+    the CMD client (`diagfwd_open(i, TYPE_CMD)`, diagfwd.c:1337) open on a
+    `DIAG_IOCTL_SWITCH_LOGGING` (ioctl 7) switch to
+    `DIAG_MEMORY_DEVICE_MODE`; the DCI variety opens via
+    `diag_dci_channel_init()`.)
+  - **2026-10-19 (late) — SMEM/SMSM/IPC-router state mapped; nothing
+    hidden, nothing waiting.** `/sys/kernel/debug/smem/mem`: item 422
+    (`SMEM_SSR_REASON_MSS0`) is never allocated — `modem subsystem failure
+    reason: (unknown, smem_get_entry_no_rlock failed)` is literal, the FW's
+    normal SFR path never runs (423 WCNSS0 / 426 VCODEC0 *are* allocated,
+    so the table is live; the SMP2P ranges 435.., 443.., 451.. are
+    partially allocated, no APPS-range or SMSM items). `/sys/kernel/debug/
+    smsm/{state,intr_mask}` are empty — there is no SMSM shared state on
+    this platform (smp2p only), closing SMSM bits as a stimulus candidate.
+    `dump_remote_ports`: node 0 has exactly three ports (0x1 servreg,
+    0x4 SSCTL, 0x8 its single client port); `dump_routing_table` has only
+    the three xprt rows; `dump_local_ports` accounts for every AP client
+    (pdserve, rmt_storage, tftp_server, two kernel ports with last-svcid
+    0x42, one with 0x2b). The `ipc_logging` contexts (`mpss_IPCRTR`,
+    `local_IPCRTR`, `kqmi_req_resp`, `kqmi_ind`, `glink`) are drained, so
+    no router trace survives to inspect.
+  - **2026-10-19 (late) — IRSC rules are not the current blocker.** The
+    A15 `sec_config` (12,846 B; on device at `/vendor/etc/` and
+    `/system/vendor/etc/`, copy in `hyb-sysroot/vendor/etc/`) restricts
+    DIAG (`4097` = 0x1001) to GIDs 2002/2950/3009/2901, WLFW (`69` =
+    0x45) and WLPS (`57` = 0x39) to GID 1000, SSCTL (`43` = 0x2b) to
+    1000/3004, servreg locator/notifier (`64` = 0x40, `66` = 0x42) to
+    GID 1001, sensors (256–511) to the sensor GIDs. The modem's own client
+    traffic is not GID-checked in practice (its lookup on the restricted
+    0x40 is served every cycle) and every local QMI client today is root,
+    so `irsc_util` (`/system/vendor/bin/irsc_util`, staged) is queued work
+    for when non-root Android QMI clients (RIL, netd) appear — not what
+    holds the modem back.
+  - **2026-10-19 (late) — WLAN rails cold, as expected pre-bringup, and no
+    CPE.** icnss is the consumer of all four icnss supplies in
+    `/sys/kernel/debug/regulator/regulator_summary` (`pm8998_l5` 0.8 CX/MX,
+    `l7_pin_ctrl` 1.8 XO, `l17_pin_ctrl` 1.3 RFA, `l25_pin_ctrl` 3.3 CH0)
+    but none shows an active enable (`use=0`): `icnss_vreg_on()` only runs
+    from `icnss_hw_power_on()`, reached through the exported
+    `icnss_power_on()`/`icnss_wlan_enable()` path the host driver
+    (qcacld) uses — nothing on this port calls it. `msm_subsys/
+    crash_reason/*` (a540_zap, adsp, ipa_fws, modem, slpi, spss, venus)
+    are all empty and there is no CPE subsystem in the AP's PIL list (the
+    `cpe_9335` image in the modem partition is not AP-loaded).
   - **Hypothesis (open, updated 2026-10-19 evening).** The modem's FW
     (Sony 2019, `DEBUG1` flag in `modem.mdt`) err-fatals +40.15 s after
     every boot on this port. Ruled out since TEST 53 opened: smp2p
@@ -2280,21 +2366,31 @@ Next actions (checkboxes for the log):
     SHM, QMI ack, ADSP boot, kernel build, or firmware mismatch.
     What remains: after its EFS reads the modem sends **no** further
     requests to any AP service (locator, RMTFS, qsocket all silent
-    through the 40.15 s), so the missing stimulus is either an AP-side
-    signal it never gets (a QMI/service-locator/PDR handshake this port
-    still lacks) or an internal NV/config-dependent timeout in the FW.
-    Interrogating the modem itself (DIAG/QSH over `/dev/diag`, which is
-    root-openable and whose A15 `libdiag.so` already loads under libhyb
-    for audio) is the only remaining way to distinguish these; the
-    ramdump path is dead (all-zero captures). Until the modem stops
-    restarting, WLFW/`wlan0` cannot come up.
-  - **Next (verify-me):** (1) read the modem's own state via DIAG/QSH
-    (A15 `tad`/`mlog_qmi_service` from `/home/charlie/hyb-sysroot/`);
-    (2) keep the now-functional RMTFS serving and confirm no EFS writes
-    are expected (modem only reads fs1/fs2 today); (3) once the modem
-    stays up, confirm WLFW QMI activity and `wlan0`; (4) integrate
-    `root64/**` into `full_maple.mk` (`PRODUCT_COPY_FILES`), add init
-    services with per-service env, the `/dev/block/bootdevice` symlink
-    (all four EFS partitions incl. `fsc`, plus
-    `setprop vendor.rmt_storage true`), and the RFS boot script;
-    rebuild, flash, verify.
+    through the 40.15 s) and its own service stack never comes up. The
+    late-evening evidence sharpens this: the AP→modem PDR registration
+    *is* delivered and acked (the modem replies UNINIT, never UP), the
+    root-PD boot services (EFS/RMTFS client, SSCTL server, servreg
+    notifier/TMS locator) all function, and everything downstream of them
+    (announced QMI set, diag, WLFW) never starts — the stall sits inside
+    the FW between those two layers. Interrogating the modem from the AP
+    is closed as an avenue: DIAG/QSH needs the modem's diag engine, which
+    never starts, and the ramdump path is dead (all-zero captures). Until
+    the modem stops restarting, WLFW/`wlan0` cannot come up.
+  - **Next (verify-me):** (1) the two levers left for the modem stall:
+    (a) a userspace `SERVREG_NOTIF_RESTART_PD_REQ` for `msm/modem/wlan_pd`
+    sent to the modem's servreg notifier (`0x42:0xb401` on the legacy IPC
+    router) — the domain-restart request icnss uses for recovery
+    (`send_pd_restart_req()` in `service-notifier.c`) has never been sent
+    on this port, and it is the one "start the domain" message the FW
+    understands; (b) a ground-truth capture: boot the phone's own LOS
+    image once, capture the same debugfs set (diag features,
+    `dump_servers`/`dump_remote_ports`, icnss stats, glink inventory)
+    with the modem up, diff, then restore from
+    `dumps/kitkat-{boot,system}.img`; (2) keep the now-functional RMTFS
+    serving and confirm no EFS writes are expected (modem only reads
+    fs1/fs2 today); (3) once the modem stays up, confirm WLFW QMI
+    activity and `wlan0`; (4) integrate `root64/**` into `full_maple.mk`
+    (`PRODUCT_COPY_FILES`), add init services with per-service env, the
+    `/dev/block/bootdevice` symlink (all four EFS partitions incl. `fsc`,
+    plus `setprop vendor.rmt_storage true`), the RFS boot script, and
+    `irsc_util` ahead of any non-root QMI client; rebuild, flash, verify.
