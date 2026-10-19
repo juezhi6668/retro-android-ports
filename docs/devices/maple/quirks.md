@@ -2351,6 +2351,36 @@ Next actions (checkboxes for the log):
     crash_reason/*` (a540_zap, adsp, ipa_fws, modem, slpi, spss, venus)
     are all empty and there is no CPE subsystem in the AP's PIL list (the
     `cpe_9335` image in the modem partition is not AP-loaded).
+  - **2026-10-19 (late) — the death is a hard 40 s timer.** Twelve
+    consecutive cycles measured from kmsg: `Brought out of reset` →
+    `modem subsystem failure reason` = 40.147–40.149 s (2 ms jitter),
+    crash → next `Brought out of reset` = 1.373–1.384 s. A fixed 40.000 s
+    budget (~0.147 s after reset release = right after the EFS/servreg
+    dialog) — the FW is *waiting on a timer*, not hanging on load, which
+    fits a boot-handshake timeout being armed and never satisfied.
+  - **2026-10-19 (late) — the AP-side WLAN chain is complete and correctly
+    parked.** `/sys/kernel/debug/icnss/stats`: `REGISTER_DRIVER 1/1` (the
+    built-in qcacld host driver, `CONFIG_QCA_CLD_WLAN=y`, `/sys/module/wlan`,
+    debugfs `/sys/kernel/debug/wlan/mem`, registered with icnss once at
+    boot), `SERVER_ARRIVE 0`, `FW_READY 0`, every WLFW QMI counter 0,
+    `PD_SERVICE_DOWN 459/459`, `recovery.root_pd_crash: 459`,
+    `pm_stay_awake/relax 461/461`; `State: 0x84180 (SSR REGISTERED | PDR
+    REGISTERED | FW DOWN | MODEM CRASHED)`; all 12 CE IRQs (GIC 413–425)
+    `Request 0`. `icnss_wlan_enable()` refuses while FW is down ("FW down,
+    ignoring wlan_enable state"), so nothing userspace-side can force the
+    handshake: the gate is the modem bringing `wlan_pd` up.
+  - **2026-10-19 (late) — WLAN is SoC-integrated (not PCIe) and its
+    firmware is staged.** `qcom,icnss@18800000` in `msm8998.dtsi`:
+    membase 8 MB, `anoc2_smmu` 0x1900/0x1901, CE IRQs 413–425,
+    `qcom,wlan-msa-memory = <0x100000>`, supplies `pm8998_l5`
+    (0.8 cx/mx), `l7_pin_ctrl` (1.8 xo), `l17_pin_ctrl` (1.3 rfa),
+    `l25_pin_ctrl` (3.3 ch0); the `qcom,msm_ath10k_wlan` node is
+    `status = "disabled"`, so the empty `/sys/bus/pci/devices/` is
+    expected, not a fault. Rails re-measured: l5/l7/l17/l25 all `use=0`
+    while live rails read high (`pm8998_s4` 6, `l1` 4, `l2` 4) — they
+    only come on in the post-FW-ready path. Port `/vendor/firmware`
+    already carries `wlanmdsp.mbn` + `wlan/` (BDF); there is no
+    `/vendor/firmware_mnt` and PIL loads straight from `/vendor/firmware`.
   - **Hypothesis (open, updated 2026-10-19 evening).** The modem's FW
     (Sony 2019, `DEBUG1` flag in `modem.mdt`) err-fatals +40.15 s after
     every boot on this port. Ruled out since TEST 53 opened: smp2p
@@ -2377,11 +2407,13 @@ Next actions (checkboxes for the log):
     never starts, and the ramdump path is dead (all-zero captures). Until
     the modem stops restarting, WLFW/`wlan0` cannot come up.
   - **Next (verify-me):** (1) the two levers left for the modem stall:
-    (a) a userspace `SERVREG_NOTIF_RESTART_PD_REQ` for `msm/modem/wlan_pd`
-    sent to the modem's servreg notifier (`0x42:0xb401` on the legacy IPC
-    router) — the domain-restart request icnss uses for recovery
-    (`send_pd_restart_req()` in `service-notifier.c`) has never been sent
-    on this port, and it is the one "start the domain" message the FW
+    (a) a userspace QMI probe against the modem's servreg notifier
+    (`0x42:0xb401` on the legacy IPC router): re-send `REGISTER_LISTENER`
+    for `msm/modem/wlan_pd` and read the raw result code/`curr_state`, and
+    send `QMI_SERVREG_NOTIF_RESTART_PD_REQ_V01` (0x24) for the same
+    domain — the restart request icnss only uses for recovery
+    (`send_pd_restart_req()`, icnss.c:3670) has never been sent on this
+    port, and it is the one "start the domain" message the FW
     understands; (b) a ground-truth capture: boot the phone's own LOS
     image once, capture the same debugfs set (diag features,
     `dump_servers`/`dump_remote_ports`, icnss stats, glink inventory)
