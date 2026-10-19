@@ -1046,22 +1046,23 @@ Next actions (checkboxes for the log):
   (modemuw.jsn, modemr.jsn, adspua.jsn, adspr.jsn). Verified live:
   `servloc: ... Service locator initialized`, and the kernel connected to
   instance 74 (adsp) and 180 (modem) servreg-notif services. The modem's
-  own TMS acts as a client of this server (requests for `tms/pdr_enabled`,
-  `tms/pddump_disabled`, `kernel/elf_loader`, `wlan/fw`, `avs/audio`
-  all arrive and are answered).
+  own TMS acts as a client of this server, but while the modem is in its
+  restart loop it sends **exactly one** query per cycle (captured
+  2026-10-19): `tms/pddump_disabled`. The earlier "all five names arrive
+  and are answered" note described pdserve's `svc_table`, not observed
+  traffic — `tms/pdr_enabled`, `kernel/elf_loader`, `wlan/fw` and
+  `avs/audio` are servable but are never queried (see TEST 53).
 - **Open blocker — modem stability:** the modem asserts its err-fatal
-  interrupt and restarts every ~41 s (`subsys-restart: ... Restart
-  sequence requested for modem`, failure reason
-  `smem_get_entry_no_rlock failed`). This predates pdserve (seen from
-  t=46 s in TEST 39) and is independent of the locator. Consequence: the
-  WLAN PD never starts (no `wlfw`/`wlan0` observed) because the modem's
-  root PD crashes ~3 s after the servreg-notif registration completes.
-  Suspected cause: no rild/keepalive on this port (stock keeps the modem
-  alive via `vendor.qcrild`); the modem watchdog fires without an AP-side
-  QMI client. A 64-bit chroot running `vendor/bin/hw/qcrild` (or a
-  minimal QMI keepalive) is the next workstream. Until then, Wi-Fi
-  bring-up code is correct and unblocks the PDR chain but cannot be
-  validated end-to-end.
+  interrupt and restarts every **41.52 s** — precisely +40.15 s after
+  `Brought out of reset` (the remaining ~1.4 s is shutdown/powerup;
+  re-measured 2026-10-19). This predates pdserve (seen from t=46 s in
+  TEST 39) and is independent of the locator. Consequence: the WLAN PD
+  never starts (no `wlfw`/`wlan0`). The "no rild/keepalive" suspicion
+  originally recorded here is **retired**: the bite is internal to the
+  modem FW (silent err-fatal, SFR never written) and is unchanged by any
+  AP-side QMI client — see TEST 53 for the ruled-out list and the
+  2026-10-19 follow-ups (Pop-kernel swap, EFS/RMTFS now served, the
+  `fsc` rule, ramdump analysis).
 - **Pending fix (next boot image):** `adsp_boot` is not oneshot, so
   `adsp-boot.sh` re-runs every ~5 s; make it `oneshot` (done in
   `init.maple.rc`). Also bake the audio HAL fix
@@ -2170,12 +2171,16 @@ Next actions (checkboxes for the log):
     `master-kernel` bit 0 (GPIO 677, the SSR ack) to 1 makes the modem
     crash immediately (3.16 s cadence) — confirming bit 0 is the SSR ack,
     not a "boot complete" signal. Reverting restores 41.36 s.
-  - **AP-side ruled out.** All A15 64-bit daemons run in situ (per
-    process `LD_LIBRARY_PATH=/system/lib64:/vendor/lib64`) and the modem
-    still cycles: `rmt_storage` (EFS reads succeed, no writes),
-    `tftp_server` (RFS tree present, no requests observed),
-    `cnss-daemon -n -l`, `pd-mapper` (real `.jsn` tables, identical
-    cadence to the in-tree `pdserve` transcription), `irsc_util`. Extra
+  - **AP-side ruled out.** All A15 64-bit daemons *link and start* in
+    situ (per process `LD_LIBRARY_PATH=/system/lib64:/vendor/lib64`;
+    their ALOG output reaches dmesg through the liblog `/dev/kmsg`
+    fallback) and the modem still cycles: `cnss-daemon -n -l`,
+    `pd-mapper` (real `.jsn` tables, identical cadence to the in-tree
+    `pdserve` transcription), `irsc_util`. `rmt_storage` and
+    `tftp_server` were re-examined on 2026-10-19 (follow-up bullets
+    below) — `rmt_storage` had **not** actually been serving then
+    (missing `/dev/block/bootdevice` and `vendor.rmt_storage`), and with
+    it genuinely serving the cadence is still 41.5 s. Extra
     daemons (`port-bridge`, `netmgrd`, `imsqmidaemon`, `ta_qmi_service`,
     `dpmQmiMgr`, `mlog_qmi_service`) also do not change the cadence.
     Killing the service locator (no pd-mapper/pdserve) does not change
@@ -2184,40 +2189,112 @@ Next actions (checkboxes for the log):
     connect and ack the modem's SSCTL indications. SHM is not configured
     for the modem. The modem's err-fatal is therefore **internal to the
     modem FW**.
-  - **Ramdump collection did not work.** `enable_ramdumps=1` was set at
-    runtime and `/dev/ramdump_modem` + `/dev/ramdump_md_modem` were held
-    open, but no `Ramdump(ramdump_modem)`/`Ramdump(ramdump_md_modem)`
-    message appeared and both files stayed 0 bytes — the modem's ramdump
-    callback (`modem_ramdump`) did not run (or took the minidump branch
-    without pushing). The modem's EFS (`modemst1`) is encrypted, and
-    Sony's `last_subsyslog` (`/proc/last_amsslog`) reports
-    "Could not read SMEM ID. NULL" (no SFR/log written). So the modem's
-    own log is not currently reachable.
-  - **Hypothesis (open, updated 2026-10-19).** The modem's FW
-    (A15/Sony, `DEBUG1` flag in `modem.mdt`) watchdog-bites ~41 s
-    after boot on this port. Additional ruled-out since TEST 53 was
-    opened: smp2p `master-kernel` bits 1 and 2 (neutral), ADSP boot
-    (subsys6 ONLINE does not change the cadence), and all remaining
-    A15 userspace daemons (`port-bridge`, `netmgrd`, `imsqmidaemon`,
-    `ta_qmi_service`, `dpmQmiMgr`, `mlog_qmi_service`). The modem's
-    watchdog bite is therefore **not** about any AP-side daemon, SMD
-    channel, smp2p bit, SHM, QMI ack, or ADSP boot. Most likely
-    cause remaining: a kernel-level feature the modem's FW depends
-    on (QRTR) or a fundamental incompatibility between the A15 modem
-    FW and this port's userspace. The modem's own log is still not
-    reachable (ramdump path does not push data; EFS is encrypted;
-    SMEM SFR item is never written). Candidates still to test:
-    (1) provide the missing AP-side "boot complete" signal (not smp2p
-    bit 0 — that is the SSR ack); (2) a QRTR-dependent QMI service the
-    legacy 4.4 IPC router lacks; (3) a minidump/ramdump collection path
-    that actually captures the modem's log. Until the modem stops
+  - **2026-10-19 — kernel swap does not change it.** A hybrid boot image
+    with the Pop kernel (`4.4.302-linckandrea-Pop-Kernel-14-r3-p`, this
+    port's DTBs + ramdisk; md5 readback verified) reproduces the
+    identical bite: first +40.15 s after `Brought out of reset`, same
+    41.5 s cadence → the KitKat kernel build/config/DTB is not the cause.
+  - **2026-10-19 — EFS/RMTFS now genuinely served (and read).** The A15
+    `rmt_storage` only serves when `/dev/block/bootdevice/by-name/
+    {modemst1,modemst2,fsg,fsc}` exist **and** the property
+    `vendor.rmt_storage` is set (otherwise it exits rc=1 with only
+    linker warnings on the console; `check_support_using_property:` +
+    "Remote storage service is not supported on %s target"). It
+    registers QMI RMTFS `0x0e:0x1` on the legacy IPC router and logs to
+    `/dev/kmsg`, so its `INFO:`/`ERR:` lines are visible in dmesg
+    (`rmt_storage_open_cb`, `rmt_storage_rw_iovec_cb`, ...). With it up,
+    the modem opens `/boot/modem_fs1`, `fs2`, `fsg`, `fsc` 0.13 s after
+    `Brought out of reset` and reads fs1 (512 B at offset 512, then the
+    full 2 MB from offset 1024) and fs2 (512 B); the reads succeed —
+    EFS is not the blocker. **`fsc` (`/dev/block/sdf3`, 8 sectors = 4 KB)
+    had never been mapped on this port** and rmt_storage's GPT fallback
+    also wants it: with RMTFS up and *any* of the four opens failing,
+    the modem err-fatals +0.2 s after the failed open → the "fast
+    cycle" (1.53 s boot-to-boot) seen while `fsc` was missing; with all
+    four served it returns to the 40.15 s stall. Partition map:
+    modemst1=sdf1, modemst2=sdf2, fsc=sdf3, fsg=sde31, modem=sde33.
+    Backups (md5): modemst1 `09d0ad48…`, modemst2 `20c57aed…`, fsg
+    `1f454957…`, fsc `620f0b67…` (`/tmp/opencode/efs2/`, copies on
+    device in `/data/local/tmp/efs2/`).
+  - **2026-10-19 — RFS/tftp_server runs but is unused.** The A15
+    `tftp_server` does not need QRTR (the `qrtr-ns service is not ready`
+    string is a code path it does not take): libqsocket registers
+    `0x1000:0x0001…` instances on the legacy IPC router (9+ new rows in
+    `dump_servers`). The RFS tree is staged per `rfs-dirs.sh`
+    (`/system/vendor/rfs/...`, `readonly/firmware → /vendor/firmware`).
+    No modem→RFS requests appear while the modem stalls (no
+    tftp_server kmsg output, cadence unchanged).
+  - **2026-10-19 — locator query name resolved.** The "21-char mystery
+    name" in the older notes is `tms/pddump_disabled` (19 chars; the
+    22-byte TLV is 3 B header + 19 chars), one query per cycle and
+    nothing else. It appears in **no** device `.jsn`; pdserve answers it
+    from its own extension (commit `beecb1c`, mapped to root_pd) — the
+    stock answer would be zero entries — and TEST 53's real-`pd-mapper`
+    run showed the identical cadence either way.
+  - **2026-10-19 — node identity corrections.** `0x2b:0x1202` is
+    **SSCTL**, not RMTFS (`SSCTL_SERVICE_ID 0x2B`,
+    `drivers/soc/qcom/sysmon-qmi.c`; instances 0x1202/0x1402 are the DT
+    `qcom,ssctl-instance-id` 0x12 (modem) / 0x14 (ADSP)). Node ids:
+    0 = `mpss_IPCRTR` (modem), 1 = loopback (AP), 5 = `lpass_IPCRTR`
+    (ADSP). The modem advertises only `0x42:0xb401` (servreg notif) +
+    `0x2b:0x1202`, stable across a >59-sample / 2 s watch; no transient
+    registrations during a cycle.
+  - **2026-10-19 — icnss view.** Per cycle: `PD service notification:
+    0x7fffffff` (UNINIT) at connect, then `0xfffffff` (DOWN) ~40 s
+    later with `cause: Root PD crashed`, `pd_state: 2` — never the UP
+    value `0x1fffffff`.
+  - **2026-10-19 — port firmware == the phone's own firmware.** Read
+    the phone's modem partition directly (`/dev/block/sde33`, FAT16
+    with 4096-B sectors — `mount -t ext4` fails `EINVAL`; use `mtools`
+    on the pulled image): the 2019-07-25 `/IMAGE` files. All four `.jsn`
+    are byte-identical to the staged copies modulo CRLF, and every
+    `modem.b*`/`mba.mbn`/`modem.mdt` size matches `/vendor/firmware`
+    exactly → firmware staging is not a factor.
+  - **Ramdump collection works mechanically but yields nothing
+    (2026-10-19).** A reader holding `/dev/ramdump_modem` open +
+    `enable_ramdumps=1` (per-boot only) captures 116,423,029 B in
+    40.3 s — but the content is 99.9996% zeros: with no debug policy in
+    the image (`Debug policy not present - msadp. Continue.`) the MBA
+    scribbles RAM before the FW dump, and yoshino DTs carry no
+    `qcom,minidump-id` (only sdm660.dtsi has it), so the minidump path
+    is unsupported. Capture requires the reader to hold the device open
+    **before** the crash (kernel waits `RAMDUMP_WAIT_MSECS` = 120 s,
+    otherwise "No consumers. Aborting.."). The earlier "no ramdump"
+    observation was this consumer rule, not a broken callback;
+    `modem_ramdump` does run. EFS (`modemst1`) is encrypted, and
+    `last_subsyslog` (`/proc/last_amsslog`) reports "Could not read SMEM
+    ID. NULL" (no SFR/log written), so the modem's own log is still not
+    reachable this way.
+  - **Hypothesis (open, updated 2026-10-19 evening).** The modem's FW
+    (Sony 2019, `DEBUG1` flag in `modem.mdt`) err-fatals +40.15 s after
+    every boot on this port. Ruled out since TEST 53 opened: smp2p
+    `master-kernel` bits 1/2 (neutral) and bit 0 (SSR ack, not a boot
+    signal), ADSP boot, every A15 userspace daemon (above), the kernel
+    image (Pop-kernel swap: identical cadence), and firmware content
+    (port `/vendor/firmware` == the phone's modem-partition files, all
+    sizes exact). QRTR is absent from this kernel (no `CONFIG_QRTR`, 0
+    `qrtr` symbols in kallsyms) and is definitely **not** the missing
+    piece: the two A15 daemons the modem does talk to (`rmt_storage`,
+    `tftp_server`) serve over the legacy IPC router fine. The bite is
+    therefore **not** about any AP-side daemon, SMD channel, smp2p bit,
+    SHM, QMI ack, ADSP boot, kernel build, or firmware mismatch.
+    What remains: after its EFS reads the modem sends **no** further
+    requests to any AP service (locator, RMTFS, qsocket all silent
+    through the 40.15 s), so the missing stimulus is either an AP-side
+    signal it never gets (a QMI/service-locator/PDR handshake this port
+    still lacks) or an internal NV/config-dependent timeout in the FW.
+    Interrogating the modem itself (DIAG/QSH over `/dev/diag`, which is
+    root-openable and whose A15 `libdiag.so` already loads under libhyb
+    for audio) is the only remaining way to distinguish these; the
+    ramdump path is dead (all-zero captures). Until the modem stops
     restarting, WLFW/`wlan0` cannot come up.
-  - **Next (verify-me):** (1) find the AP-side signal the modem waits
-    for (try toggling other smp2p `master-kernel` bits / check the
-    modem's DIAG via `/dev/diag`); (2) collect the modem's ramdump
-    (fix the minidump/ramdump path so `/dev/ramdump_md_modem` receives
-    data); (3) once the modem stays up, confirm WLFW QMI activity and
-    `wlan0`; (4) integrate `root64/**` into `full_maple.mk`
-    (`PRODUCT_COPY_FILES`), add init services with per-service env, the
-    `/dev/block/bootdevice` symlink, and the RFS boot script; rebuild,
-    flash, verify.
+  - **Next (verify-me):** (1) read the modem's own state via DIAG/QSH
+    (A15 `tad`/`mlog_qmi_service` from `/home/charlie/hyb-sysroot/`);
+    (2) keep the now-functional RMTFS serving and confirm no EFS writes
+    are expected (modem only reads fs1/fs2 today); (3) once the modem
+    stays up, confirm WLFW QMI activity and `wlan0`; (4) integrate
+    `root64/**` into `full_maple.mk` (`PRODUCT_COPY_FILES`), add init
+    services with per-service env, the `/dev/block/bootdevice` symlink
+    (all four EFS partitions incl. `fsc`, plus
+    `setprop vendor.rmt_storage true`), and the RFS boot script;
+    rebuild, flash, verify.
