@@ -2467,6 +2467,35 @@ Next actions (checkboxes for the log):
     AP-held lever — an explicit `RESTART_PD` request from userspace — is
     now tried and refused (see the `pdstart` bullet above): the UNINIT
     domain state is internal to the FW.
+  - **Falsified: the locator answer for `tms/pddump_disabled`.** Our
+    hand-written `pdserve` hardcoded `tms/pddump_disabled ->
+    msm/modem/root_pd` (instance 0), but none of the four
+    modem-partition `.jsn` tables contains that name — the string lives
+    only in the modem FW's own config table (`pddump_disabled /
+    pd_mon_restart_enable / pd_mon_dump_disable`), so stock `pd-mapper`
+    answers "not found". Since this is the modem's **only** locator query
+    and it lands ~0.14 s after reset (the 40 s window starts right there),
+    a bogus `total=1` pointing at a domain that hosts no such service was
+    a candidate cause. Removed the entry
+    (`devices/maple/kitkat/pdserve/pdserve.c`), rebuilt static, installed
+    to `/system/bin/pdserve` (`/system` is ext4 **ro**: `mount -o
+    rw,remount /system`; init respawns the service, so `setprop ctl.stop
+    pdserve` first or `cp` fails with "Text file busy"), restarted, and
+    ran two full cycles: the reply is now `total=0` and the cadence is
+    **unchanged** (41.43 s resets). Dead hypothesis; the locator now
+    matches stock tables instead of our invention.
+  - **Crash line, exact text.** dmesg per cycle is
+    `modem subsystem failure reason: (unknown, smem_get_entry_no_rlock
+    failed).` — the "unknown" is PIL failing to read SFR item 422, which
+    the modem never allocates (see the SFR bullet); not a new datum, but
+    it is the string to grep for, **not** `err-fatal` (that name comes
+    from the smp2p bit, there are 0 such lines in dmesg).
+  - **No userspace rail forcing.** `/sys/kernel/debug/regulator` and
+    `/sys/kernel/debug/spmi` do not exist on this kernel, so the WLAN
+    rails (`pm8998_l5/l7/l17/l25`) cannot be switched on by hand; only
+    icnss's `icnss_power_on()` path can. Powering the WLAN chip before the
+    modem's `wlan_pd` bringup therefore needs a kernel change (or the
+    ground-truth boot to learn whether stock ever leaves them on early).
   - **Next (verify-me):** (1) the modem stall: the AP→modem stimulus
     avenue is closed (kernel listener registration is acked UNINIT every
     boot; explicit `RESTART_PD` is refused — above), so the remaining
