@@ -51,6 +51,10 @@ Step-by-step, from a pristine AOSP checkout to a flashable image:
   playback verified on hardware).
 - [mkbootimg-cooper](software/mkbootimg-cooper.md) — pagesize-patched
   Donut `mkbootimg` that can pack cooper's boot.img.
+- [ipc-router-tools](software/ipc-router-tools.md) — `irsc-load` (arms
+  the IPC Router Security Configuration, without which every userspace
+  QMI sender blocks forever in `sendmsg`) and `pdstart` (raw
+  SERVREG_NOTIF client that proved the modem refuses `RESTART_PD`).
 
 ## Reference notes
 

@@ -2381,6 +2381,64 @@ Next actions (checkboxes for the log):
     only come on in the post-FW-ready path. Port `/vendor/firmware`
     already carries `wlanmdsp.mbn` + `wlan/` (BDF); there is no
     `/vendor/firmware_mnt` and PIL loads straight from `/vendor/firmware`.
+  - **2026-10-19 (night) — every userspace QMI sender blocks forever in
+    `sendmsg`: IRSC is never armed on this port.** Symptom: a userspace
+    `AF_MSM_IPC` send hangs in `D` state, SIGKILL-proof; kernel stack
+    `wait_for_irsc_completion+0x54/0x68 -> msm_ipc_router_sendmsg+0x2ac/0x350
+    -> SyS_sendto+0x19c/0x22c`; `dmesg` gains
+    `wait_for_irsc_completion: waiting for IPC Security Conf.` every 30 s.
+    Root cause: `net/ipc_router/ipc_router_socket.c:351` calls
+    `wait_for_irsc_completion()` on *every* `CLIENT_PORT` send, and the
+    completion is signaled only when an **IRSC_PORT is destroyed**
+    (`net/ipc_router/ipc_router_core.c:3567` → `signal_irsc_completion()`
+    → `complete_all()`, `ipc_router_security.c:71`). A port becomes
+    IRSC_PORT only via `IPC_ROUTER_IOCTL_CONFIG_SEC_RULES`
+    (`_IOR(0xC3, 5)`; sets the type unless the call returns `-EPERM`;
+    root-only, and rules may not use `ALL_SERVICE`). Stock arms this by
+    running `irsc_util` once at boot — it configures each `sec_config`
+    rule and exits, and the port teardown releases every blocked sender.
+    This port has no `irsc_util`, so the completion never fires and any
+    userspace QMI *sender* (cnss-daemon, the A15 clients, any probe) hangs
+    before its first byte — a strong candidate for the earlier A15-daemon
+    stalls. Kernel QMI handles are unaffected, which is why
+    icnss/service-notifier and the server-side rmt_storage/tftp/pdserve
+    traffic works. Fix + proof: `devices/maple/kitkat/pdstart/irsc-load.c`
+    (armv7 static musl), `irsc-load /vendor/etc/sec_config` — parses
+    `service:instance:gid[:gid...]` decimal lines (`4294967295` = all
+    instances) into `CONFIG_SEC_RULES` ioctls, reports
+    `rules ok=300 fail=0`, then closes the socket. Two probes that had
+    been stuck in the wait for 8+ minutes exited immediately afterwards
+    and the `pdstart` run below then sent/received normally. The port's
+    `/vendor/etc/sec_config` is the stock 12846 B file (byte-reference:
+    `/home/charlie/hyb-sysroot/vendor/etc/sec_config`). Root senders
+    bypass the rules (`msm_ipc_check_send_permissions`, `euid == 0`) and
+    lookup falls back service → instance → `ALL_SERVICE` → built-in
+    default (AID_NET_RAW 3004). The A15 `irsc64` staged on the device
+    fails (rc=255, loads nothing), so this tool is the one to use — and
+    it belongs in the port boot sequence before any non-root QMI client.
+  - **2026-10-19 (night) — the last AP→modem lever tried and closed:
+    `pdstart` (SERVREG_NOTIF client) is acked for registration/state but
+    the modem refuses `RESTART_PD`.** Tool:
+    `devices/maple/kitkat/pdstart/pdstart.c` (armv7 static musl;
+    `AF_MSM_IPC`=27, `IPC_ROUTER_IOCTL_LOOKUP_SERVER` `_IOWR(0xC3,2)` →
+    node 0, port 1, service `0x42`, instance `0xb401` =
+    `BUILD_INSTANCE_ID(vers 1, ins 180)`; connect by `MSM_IPC_ADDR_ID`;
+    7-byte QMI header + TLVs as in `pdserve`). One run at uptime ~9992 s,
+    raw responses: `REGISTER_LISTENER` (0x20, TLV 0x01 enable=1, TLV 0x02
+    name) → `TLV 0x02 result=0 error=0`, `TLV 0x10 curr_state=0x7fffffff`
+    (UNINIT); `QUERY_STATE` (0x21) → result=0 error=0, curr_state
+    0x7fffffff; `RESTART_PD` (0x24, TLV 0x01 name) → **`result=1
+    error=9`** (refused; 9 is not in this kernel's
+    `include/soc/qcom/msm_qmi_interface.h` enum — legacy table: 9 =
+    TIMEOUT). No `STATE_UPDATED_IND` (0x22) in the following 10 s and the
+    modem is unaffected: cycle continues, icnss `SERVER_ARRIVE`/
+    `FW_READY` still 0, `recovery.root_pd_crash: 485`, no `wlan0`,
+    `State: 0x84180`. Read: the modem's TMS *knows* `msm/modem/wlan_pd`
+    (it answers for the name) and reports it UNINIT, but will not start it
+    on AP request — UNINIT is an internal FW condition, not a missing AP
+    stimulus. Both AP→modem "start the domain" routes (the kernel's
+    per-boot listener registration and now an explicit userspace restart
+    request) are exhausted.
   - **Hypothesis (open, updated 2026-10-19 evening).** The modem's FW
     (Sony 2019, `DEBUG1` flag in `modem.mdt`) err-fatals +40.15 s after
     every boot on this port. Ruled out since TEST 53 opened: smp2p
@@ -2405,24 +2463,29 @@ Next actions (checkboxes for the log):
     the FW between those two layers. Interrogating the modem from the AP
     is closed as an avenue: DIAG/QSH needs the modem's diag engine, which
     never starts, and the ramdump path is dead (all-zero captures). Until
-    the modem stops restarting, WLFW/`wlan0` cannot come up.
-  - **Next (verify-me):** (1) the two levers left for the modem stall:
-    (a) a userspace QMI probe against the modem's servreg notifier
-    (`0x42:0xb401` on the legacy IPC router): re-send `REGISTER_LISTENER`
-    for `msm/modem/wlan_pd` and read the raw result code/`curr_state`, and
-    send `QMI_SERVREG_NOTIF_RESTART_PD_REQ_V01` (0x24) for the same
-    domain — the restart request icnss only uses for recovery
-    (`send_pd_restart_req()`, icnss.c:3670) has never been sent on this
-    port, and it is the one "start the domain" message the FW
-    understands; (b) a ground-truth capture: boot the phone's own LOS
-    image once, capture the same debugfs set (diag features,
-    `dump_servers`/`dump_remote_ports`, icnss stats, glink inventory)
-    with the modem up, diff, then restore from
-    `dumps/kitkat-{boot,system}.img`; (2) keep the now-functional RMTFS
-    serving and confirm no EFS writes are expected (modem only reads
-    fs1/fs2 today); (3) once the modem stays up, confirm WLFW QMI
-    activity and `wlan0`; (4) integrate `root64/**` into `full_maple.mk`
+    the modem stops restarting, WLFW/`wlan0` cannot come up. The last
+    AP-held lever — an explicit `RESTART_PD` request from userspace — is
+    now tried and refused (see the `pdstart` bullet above): the UNINIT
+    domain state is internal to the FW.
+  - **Next (verify-me):** (1) the modem stall: the AP→modem stimulus
+    avenue is closed (kernel listener registration is acked UNINIT every
+    boot; explicit `RESTART_PD` is refused — above), so the remaining
+    decisive comparison is a ground-truth capture: boot the phone's own
+    LOS image once, capture diag features, icnss stats, the prompt QoS/
+    glink inventory and the modem's full boot-time dialog (note:
+    `/sys/kernel/debug/ipc_router/dump_servers` does not exist on this
+    kernel — capture whichever `dump_*` files
+    `/sys/kernel/debug/ipc_router/` actually exposes) with the modem up,
+    diff against the port, then restore from
+    `dumps/kitkat-{boot,system}.img`. This shows whether a healthy modem
+    also leaves `wlan_pd` UNINIT at boot or brings it up, and whether its
+    first-40-s dialog differs; (2) keep the now-functional RMTFS serving
+    and confirm no EFS writes are expected (modem only reads fs1/fs2
+    today); (3) once the modem stays up, confirm WLFW QMI activity and
+    `wlan0`; (4) integrate `root64/**` into `full_maple.mk`
     (`PRODUCT_COPY_FILES`), add init services with per-service env, the
     `/dev/block/bootdevice` symlink (all four EFS partitions incl. `fsc`,
     plus `setprop vendor.rmt_storage true`), the RFS boot script, and
-    `irsc_util` ahead of any non-root QMI client; rebuild, flash, verify.
+    `irsc-load` (`devices/maple/kitkat/pdstart/irsc-load.c`) ahead of any
+    non-root QMI client — without it every userspace QMI sender blocks
+    forever (above); rebuild, flash, verify.
