@@ -2193,10 +2193,20 @@ Next actions (checkboxes for the log):
     Sony's `last_subsyslog` (`/proc/last_amsslog`) reports
     "Could not read SMEM ID. NULL" (no SFR/log written). So the modem's
     own log is not currently reachable.
-  - **Hypothesis (open).** The modem's FW (A15/Sony, `DEBUG1` flag in
-    `modem.mdt`) watchdog-bites ~41 s after boot on this port. The A15
-    AP differs in userspace (all daemons ruled out) and possibly in a
-    kernel feature the modem's FW depends on; candidates still to test:
+  - **Hypothesis (open, updated 2026-10-19).** The modem's FW
+    (A15/Sony, `DEBUG1` flag in `modem.mdt`) watchdog-bites ~41 s
+    after boot on this port. Additional ruled-out since TEST 53 was
+    opened: smp2p `master-kernel` bits 1 and 2 (neutral), ADSP boot
+    (subsys6 ONLINE does not change the cadence), and all remaining
+    A15 userspace daemons (`port-bridge`, `netmgrd`, `imsqmidaemon`,
+    `ta_qmi_service`, `dpmQmiMgr`, `mlog_qmi_service`). The modem's
+    watchdog bite is therefore **not** about any AP-side daemon, SMD
+    channel, smp2p bit, SHM, QMI ack, or ADSP boot. Most likely
+    cause remaining: a kernel-level feature the modem's FW depends
+    on (QRTR) or a fundamental incompatibility between the A15 modem
+    FW and this port's userspace. The modem's own log is still not
+    reachable (ramdump path does not push data; EFS is encrypted;
+    SMEM SFR item is never written). Candidates still to test:
     (1) provide the missing AP-side "boot complete" signal (not smp2p
     bit 0 — that is the SSR ack); (2) a QRTR-dependent QMI service the
     legacy 4.4 IPC router lacks; (3) a minidump/ramdump collection path
