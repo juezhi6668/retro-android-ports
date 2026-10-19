@@ -978,6 +978,12 @@ Next actions (checkboxes for the log):
         adsprpcd on this port; Lineage ships both plus rmt_storage and
         tftp_server). No new tombstones from the probe (the one new
         tombstone is a toolbox `ls|grep` SIGPIPE, known noise).
+        **Resolved 2026-10-19 (TEST 50): not a protection domain.**
+        The ADSP was up all along; it was missing its ACDB calibration
+        (the kernel cal blocks come from a userspace loader) and the HAL
+        wrote a quarter of each buffer (KitKat tinyalsa `pcm_write` takes
+        bytes). No `adsprpcd` was needed — see the audio bringup log at
+        the end of this file.
       - QRTR verdict (2026-10-16, definitive): `/proc/kallsyms` holds
         ZERO `qrtr` symbols (positive controls pass: binder 409,
         msm_ipc_router 58, qmi_handle 12), `/proc/net` has no qrtr, and
@@ -1830,3 +1836,97 @@ Next actions (checkboxes for the log):
     in the flashed kernel (md5 `4a7b3eaf…`). Visual confirmation over a
     long idle still belongs to the owner; this is the automated
     evidence.
+
+## Bringup log: audio — ACDB calibration + framework playback (2026-10-19)
+
+- **TEST 50 (owner: audio parity with
+  [DoomGuy41/Taimen-KitKat](https://github.com/DoomGuy41/Taimen-KitKat);
+  2026-10-19):** **playback through the framework works.** An `AudioTrack`
+  tone (`audiotrack_test`) plays through AudioFlinger and
+  `audio.primary.maple`; a parallel DMIC capture shows the 440 Hz tone at
+  **~99 % of the 150–3000 Hz band energy** for three consecutive seconds
+  (peak ~180–240 at music volume 11/15; the quiet control sits at 0.02–0.08),
+  with no `cal_block` errors in dmesg. Verified on the flashed images
+  (boot.img `0b0e750db3d6b6381d1e17f95e89af8c`, sparse system.img
+  `3b3d03bf03744ee8d468a0cd8039e7fd`; TWRP md5 readbacks matched). The
+  chain, in the order it bit:
+  - **No calibration means no audio, even with a running PCM.**
+    q6asm/q6afe look ACDB blocks up in the kernel at stream/port start
+    (`send_afe_cal_type`, `q6asm_send_cal`); with none they log
+    `cal_block not found!!` / `cal_block is NULL` and the dsp drains the
+    buffer faster than realtime with silence on the speaker. Blocks are
+    pushed through `/dev/msm_audio_cal` by a userspace loader and are tied
+    to that process's fd, so the HAL owns the loader for the life of
+    mediaserver (the resident `acdbtest --v3 --hold` helper is the probe
+    that established it; a die-after-sending helper loses the blocks).
+  - **The loader is a newer-Android library, so it rides libhyb.**
+    `libacdbloader.so` (+ `libaudcal`, `libacdbrtac`, `libacdb-fts`,
+    `libadiertac`, `libmiscta`, `libdiag`, the vendor `libtinyalsa`) is
+    staged by `tools/libhyb/stage.py` (`ACDB` roots) exactly like the
+    Adreno driver, and `audio_hw.c` calls `acdb_loader_init_v2(card, NULL,
+    0)` + `acdb_loader_send_audio_cal_v3(15, 1, 69936, 48000, 0)` before
+    the route and `pcm_open` (`acdb_stream_cal()`; app type 69936 =
+    qualcomm's `DEFAULT_APP_TYPE_RX_PATH`, acdb id 15 = speaker from the
+    vendor `audio_platform_info.xml`).
+  - **`hw_platform` picks the acdbdata directory.** The loader builds
+    `/vendor/etc/acdbdata/<hw_platform>/` from
+    `/sys/devices/soc0/hw_platform`, which reads **MTP** on maple, while
+    the Lineage yoshino tree ships its data under `Sony/`. Staging it as
+    `Sony/` leaves the loader without a workspace file; `stage.py` copies
+    `vendor/etc/acdbdata/Sony` → `acdbdata/MTP` and `full_maple.mk`
+    installs it to `/system/vendor/etc/acdbdata/MTP` (8 files: 7 `.acdb` +
+    `workspaceFile_Sony_yoshino.qwsp`). The vendor tree's own `MTP/`
+    directory holds a different (tavil-era) calibration — the yoshino
+    (`Sony/`) set is the right one for this tasha codec, staged under the
+    `MTP` name.
+  - **`/dev/msm_audio_cal` is `root:root 0600` and mediaserver is uid
+    `media`.** The loader's open() failed EACCES and the failure surfaced
+    later and indirectly, as `ADIE RTAC INIT` →
+    `allocate_cal_block failed!` → `Cannot allocate memory!` → init
+    `-ENOMEM`. Fix in `ueventd.maple.rc`: `0660 media audio` (verified:
+    `crw-rw---- media audio /dev/msm_audio_cal`). Stock uses the same
+    group rule.
+  - **mediaserver opens the HAL before the card probes.** `adev_open()` runs
+    at ~5 s; the tasha card registers at ~8 s (the adsp boots first), so
+    the old code cached `card_name = "tavil"` and a NULL mixer forever —
+    `speaker_path(NULL)` was a no-op, `pcm_open` on the by-then-present
+    card 0 still succeeded, and playback was silent with a *running* PCM.
+    `ensure_card()` now re-detects and opens the mixer on first stream, and
+    `acdb_ensure()` only initializes the loader once the card is up
+    (initializing earlier dies in ADIE RTAC init with `-ENOMEM`).
+  - **KitKat's tinyalsa `pcm_write()` / `pcm_read()` take BYTES, not
+    frames.** `external/tinyalsa/pcm.c` divides the count by the frame size
+    itself, so `pcm_write(pcm, buffer, frames)` wrote only 1024 of every
+    4096 bytes AudioFlinger handed over — the dsp got a chopped signal and
+    the speaker stayed silent. Dynamic debug showed it directly:
+    `msm_pcm_playback_copy:fbytes =1024: xfer=1024 size=4096` for the HAL
+    vs `=2048: xfer=2048` for `tone_test`. Fix: pass `bytes` on both paths
+    (`out_write` and `in_read`), and the same in `tools/tone_test.c`.
+  - **Debug method that worked.** debugfs is **not** mounted at boot
+    (`/d` is a dangling symlink to `/sys/kernel/debug`); `mount -t debugfs
+    none /d` then gives `dynamic_debug/control`, and
+    `echo "file msm-pcm-q6-v2.c +p" > control` (also `q6asm.c`, `q6adm.c`,
+    `q6afe.c`, `msm-pcm-routing-v2.c`) traces every buffer/cal step in
+    dmesg. That is what proved the HAL was writing (it was) and the cal was
+    arriving (it was) — the count/unit bug was underneath.
+  - **Runner tools.** `acdbtest` (`devices/maple/kitkat/hyb/`, libhyb;
+    `--init-only`, `--send ID TYPE`, `--v3 --hold 15 1`) proved loader +
+    paths + the fd-lifetime rule before the HAL owned calibration.
+    `audiotrack_test` (`devices/maple/kitkat/audio/`, in the image) drives
+    AudioTrack → AudioFlinger → HAL, the only path that exercises the HAL's
+    own stream handling; `tools/tone_test` talks to tinyalsa directly and
+    stays the low-level route/capture tool.
+  - **Two adjacent fixes.** `adsp_boot` gained `oneshot`: without it init
+    restarted the script every ~5 s and every run re-wrote
+    `/sys/kernel/boot_adsp/boot` (`adsp_loader_do: scheduling work to load
+    ADSP fw` spam, and a reload tramples live streams); after the fix,
+    `dmesg | grep -c "boot_adsp write returned"` = 1 per boot. And
+    `full_maple.mk` inherits `frameworks/base/data/sounds/AllAudio.mk` —
+    the image had no `/system/media/audio` at all, so there were no
+    ringtones or UI effects.
+  - **Still open.** Headset/headphone route + acdb id 10 (the HAL always
+    declares speaker 15); capture calibration (DEC7 dmic route runs
+    uncalibrated, TX app type not sent); a volume-key UI click was not
+    observed (no stream start at the key event — likely needs the screen
+    on; `audiotrack_test` covers the same framework path); BT SCO stays
+    known-dead (CHARQUIRKS).

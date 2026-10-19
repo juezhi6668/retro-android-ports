@@ -22,3 +22,10 @@
 # port runs SELinux permissive, so DAC is the whole story.
 /dev/kgsl-3d0             0666   root       root
 /dev/ion                  0666   root       root
+
+# ACDB calibration (2026-10-19): audio.primary.maple (mediaserver, uid media) loads
+# libacdbloader through libhyb; the loader opens /dev/msm_audio_cal and pushes the
+# yoshino acdb blocks into the kernel, where q6asm/q6afe look them up at stream
+# start. The driver creates the node root:root 0600, so open() failed EACCES and
+# playback stayed silent. Stock uses 0660 media audio.
+/dev/msm_audio_cal       0660   media      audio

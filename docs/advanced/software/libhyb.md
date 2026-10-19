@@ -7,6 +7,9 @@ gralloc1, dependencies — into every KitKat process, and a 64-bit `fbpresentd`
 puts SurfaceFlinger's buffers on the panel through an MDSS atomic commit. It
 replaces the glrenderd design (GL streamed over a socket into a Lineage
 chroot), which is deleted: the driver now runs inside the process that calls it.
+The same loader carries a second, unrelated consumer on maple: the Android 15
+**ACDB audio calibration loader** (`libacdbloader.so`) that `audio.primary.maple`
+loads to give the dsp its tuning data (below).
 
 Ported from [DoomGuy41/Taimen-KitKat](https://github.com/DoomGuy41/Taimen-KitKat)
 (Pixel 2 XL, same SoC family) and landed on maple first — the disposition of
@@ -187,6 +190,44 @@ port or from cross-checks against the sources, not from maple hardware.
   width/height/format from the HAL (it ignores stride/numFramebuffers for the
   framebuffer surface).
 
+## Second consumer: audio ACDB calibration (maple, 2026-10-19)
+
+Graphics is not the only newer-Android vendor library KitKat can run this way.
+`audio.primary.maple` (`devices/maple/kitkat/audio/audio_hw.c`) loads
+`libacdbloader.so` through libhyb for **ACDB calibration**: qcom's kernel audio
+drivers look up ACDB blocks in `/dev/msm_audio_cal` at stream/port start, the
+loader is the only writer of those blocks, and its Android-15 build cannot run
+under KitKat's linker or bionic. The playlist:
+
+- The HAL calls `hyb_dlopen("libacdbloader.so", RTLD_NOW)`, resolves
+  `acdb_loader_init_v2` + `acdb_loader_send_audio_cal_v3`, and **keeps the
+  handle for the life of mediaserver** — the cal blocks are dropped when the
+  loader's `/dev/msm_audio_cal` fd closes, so a one-shot helper is not enough.
+- Same staging tool: `stage.py` walks the `ACDB` root
+  (`libacdbloader.so`) and its `DT_NEEDED` closure
+  (`libaudcal`, `libacdbrtac`, `libacdb-fts`, `libadiertac`, `libmiscta`,
+  `libdiag`, the vendor `libtinyalsa`) into the same `/system/a15` tree the
+  Adreno driver lives in.
+- The data is **not** part of the closure: `/sys/devices/soc0/hw_platform`
+  reads `MTP` on maple, so `stage.py` copies the Lineage yoshino acdb data
+  (`vendor/etc/acdbdata/Sony/`) to `acdbdata/MTP/` next to `root/`, and
+  `full_maple.mk` installs it to `/system/vendor/etc/acdbdata/MTP/`.
+- Node access is a port fix: `ueventd.maple.rc` opens
+  `/dev/msm_audio_cal` to `0660 media audio` (the driver's default is
+  `root:root 0600` and mediaserver is uid `media`).
+- Verified end-to-end 2026-10-19: AudioTrack tone audible through the
+  framework HAL (99 % of the capture's band energy at 440 Hz), listener
+  script and failure modes in
+  [maple quirks](../../devices/maple/quirks.md) TEST 50 and the generic
+  lessons in the [KitKat porting notes](../porting-notes/kitkat.md).
+
+Diagnostics that shipped with it: `acdbtest`
+(`devices/maple/kitkat/hyb/acdbtest.c`, in the image) drives the loader
+directly (`--init-only`, `--send ID TYPE`, `--v3 --hold 15 1` — the `--hold`
+form is the resident-fd proof), and `audiotrack_test`
+(`devices/maple/kitkat/audio/audiotrack_test.cpp`) plays a tone through
+AudioFlinger instead of tinyalsa.
+
 ## Building and staging
 
 Patch set: the graphics work needs **no** graphics patches to AOSP any more — the
@@ -204,7 +245,9 @@ make bootimage systemimage                        # HYB_DIR/BIN_DIR copied by fu
 - `extract-lineage.sh` unpacks a Lineage 22.1 maple build (system + vendor, and
   the runtime apex for bionic); `stage.py` walks `DT_NEEDED` from the Adreno
   driver + QTI gralloc1 and copies the closure plus the a540 firmware into the
-  hyb root (`root/vendor/...`, `root/system/...`).
+  hyb root (`root/vendor/...`, `root/system/...`). Since 2026-10-19 it walks a
+  second root, `libacdbloader.so` (audio ACDB, above), and copies the yoshino
+  acdb data to `acdbdata/MTP/` next to `root/`.
 - `full_maple.mk` copies `vendor/sony/maple-hyb` into `/system/a15` and
   `vendor/sony/maple-bin` into `/system/bin` **when present**; both staging dirs
   live outside `vendor/sony/maple` because `sync-device-tree.sh` rsyncs with
@@ -261,6 +304,14 @@ checklist below is what was run, in order:
    scroll) vs the glrenderd baseline (~26–35 fps). Power under animation was
    not re-measured (no meter on the workstation) — TODO if the comparison
    matters.
+8. Audio through the same loader (added 2026-10-19): `audiotrack_test 6` while
+   `tone_test cap` records — the capture holds 440 Hz at ~99 % of the
+   150–3000 Hz band energy for three seconds (peak ≈ 200 at music volume
+   11/15), `dmesg` shows `acdb: loader init(msm8998-tasha-snd-card) = 0` from
+   mediaserver and an `ACDB-LOADER[…] send_audio_cal, acdb_id = 15` block set
+   at each stream start, with no `cal_block` errors. Failure here is the ACDB
+   closure, the `hw_platform`/acdbdata directory, the `/dev/msm_audio_cal`
+   DAC rule, or the tinyalsa byte/frame unit — see *Second consumer* above.
 
 ## Porting it to another device
 
@@ -284,3 +335,8 @@ checklist below is what was run, in order:
 7. Set `USE_OPENGL_RENDERER := true` in `BoardConfig.mk` (and carry the
    hwui ES2 cap if the driver reports ES3) — without the flag KitKat
    builds no `libhwui` at all and every UI frame is software-drawn.
+8. For the audio consumer of the same loader: stage the target's own
+   acdbdata under the directory `/sys/devices/soc0/hw_platform` reports (not
+   the name the vendor tree uses), open `/dev/msm_audio_cal` to the uid that
+   runs mediaserver, and keep the loader handle alive in the HAL — the cal
+   blocks die with its fd.

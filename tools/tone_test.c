@@ -14,6 +14,7 @@
  */
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
 #include <string.h>
 #include <limits.h>
 #include <tinyalsa/asoundlib.h>
@@ -87,6 +88,40 @@ static void do_route(const char *path)
     mixer_close(m);
 }
 
+static void do_set(int argc, char **argv)
+{
+    struct mixer *m = open_mixer();
+    struct mixer_ctl *c = mixer_get_ctl_by_name(m, argv[2]);
+    int vals[64];
+    int i;
+    if (!c) { printf("missing: %s\n", argv[2]); exit(1); }
+    for (i = 3; i < argc && i - 3 < 64; i++)
+        vals[i - 3] = (int)strtol(argv[i], NULL, 0);
+    for (int k = 0; k < i - 3; k++) {
+        if (mixer_ctl_set_value(c, k, vals[k]) < 0) {
+            printf("set failed: %s[%d]\n", argv[2], k);
+            mixer_close(m);
+            exit(1);
+        }
+        printf("  [%d] = %d\n", k, vals[k]);
+    }
+    printf("SET %s (%d values)\n", argv[2], i - 3);
+    mixer_close(m);
+}
+
+static void do_get(const char *name)
+{
+    struct mixer *m = open_mixer();
+    struct mixer_ctl *c = mixer_get_ctl_by_name(m, name);
+    unsigned n, i;
+    if (!c) { printf("missing: %s\n", name); exit(1); }
+    n = mixer_ctl_get_num_values(c);
+    printf("%s: %u values\n", name, n);
+    for (i = 0; i < n; i++)
+        printf("  [%u] = %d\n", i, mixer_ctl_get_value(c, i));
+    mixer_close(m);
+}
+
 static void do_play(const char *wavpath, unsigned period)
 {
     FILE *f = fopen(wavpath, "rb");
@@ -135,7 +170,8 @@ static void do_play(const char *wavpath, unsigned period)
             stereo[2 * i] = in[i];
             stereo[2 * i + 1] = in[i];
         }
-        if (pcm_write(pcm, stereo, frames) != 0) {
+        /* kitkat tinyalsa pcm_write() takes bytes */
+        if (pcm_write(pcm, stereo, frames * 2 * sizeof(short)) != 0) {
             printf("pcm_write err: %s\n", pcm_get_error(pcm));
             break;
         }
@@ -194,7 +230,8 @@ static void do_cap(const char *wavpath, int seconds, unsigned period)
     printf("capturing %d s...\n", seconds);
     total = seconds * (48000 / period);
     while (written < total) {
-        if (pcm_read(pcm, buf, period) != 0) {
+        /* kitkat tinyalsa pcm_read() takes bytes (period frames * 2) */
+        if (pcm_read(pcm, buf, period * 2) != 0) {
             printf("pcm_read err: %s\n", pcm_get_error(pcm));
             break;
         }
@@ -246,7 +283,11 @@ int main(int argc, char **argv)
     }
     if ((!strcmp(argv[1], "play")) && argc > 3)
         period = atoi(argv[3]);
-    if (!strcmp(argv[1], "list"))
+    if (!strcmp(argv[1], "set"))
+        do_set(argc, argv);
+    else if (!strcmp(argv[1], "get"))
+        do_get(argv[2]);
+    else if (!strcmp(argv[1], "list"))
         do_list();
     else if (!strcmp(argv[1], "route") && argc > 2)
         do_route(argv[2]);

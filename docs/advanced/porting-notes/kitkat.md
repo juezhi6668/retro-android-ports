@@ -537,6 +537,73 @@ lessons:
   and use it for the geometry check (stride, shear), while the live check
   is the presenter's fence/rate log.
 
+## Audio (ACDB) lessons (maple, verified on hardware 2026-10-19)
+
+Qualcomm's kernel audio drivers (q6asm/q6afe/q6adm) are **calibration
+consumers**: at stream/port start they look up ACDB blocks that a userspace
+loader pushed into `/dev/msm_audio_cal`. On a port whose old userspace has
+no loader, the block lookup fails (`send_afe_cal_type: cal_block not
+found!!`, `q6asm_send_cal: cal_block is NULL`) and playback is silent with
+a *running* PCM — the dsp just drains the buffer faster than realtime.
+The loader (`libacdbloader.so`) is an Android-15-vintage library, so the
+same in-process trick as the GPU driver applies. Field log: maple quirks
+TEST 50; the HAL is
+[`devices/maple/kitkat/audio/audio_hw.c`](../../../devices/maple/kitkat/audio/audio_hw.c).
+
+- **The cal blocks are owned by the loader's fd.** They appear when the
+  loader opens `/dev/msm_audio_cal` and vanish when it exits, so a
+  fire-and-forget helper is not enough — whatever loads them must stay
+  resident (the HAL keeps the handle for the life of mediaserver). A
+  resident test helper (`acdbtest --v3 --hold`) is how to prove the
+  lifetime rule before wiring it into a HAL.
+- **The in-kernel contract is the app-type cfg control.** Before routing,
+  the HAL sets `Audio Stream 0 App Type Cfg` to `[app_type, acdb_id,
+  sample_rate]` (KitKat's `mixer_ctl_set_array` supports the INTEGER
+  array; the control has 128 slots and the write zeroes the rest, which
+  matches the stock 3-value form) and then asks the loader for the
+  matching blocks: `acdb_loader_send_audio_cal_v3(acdb_id, dev_type=1,
+  app_type, rate, 0)`. Order matters: cfg → cal → route → `pcm_open`,
+  because the afe-cal is applied when the backend port is enabled and the
+  asm-cal when the PCM opens.
+- **`hw_platform` selects the acdbdata directory, and the name is not
+  cosmetic.** The loader builds `/vendor/etc/acdbdata/<hw_platform>/`
+  (workspace file + top-level `.acdb`) from `/sys/devices/soc0/hw_platform`
+  — "MTP" on maple — while upstream trees often ship the files under a
+  form-factor or OEM directory (`Sony/` for yoshino). Stage the data under
+  the name the device actually reports, or the loader initializes with no
+  workspace and the calibration is empty.
+- **The node is root-only by default; a group rule is required.** The
+  driver creates `/dev/msm_audio_cal` `root:root 0600`, and the loader
+  runs inside mediaserver (uid `media`). The EACCES is silent at open()
+  time and only surfaces later as an unrelated-looking init failure
+  (`ADIE RTAC INIT` → `allocate_cal_block failed!` → `Cannot allocate
+  memory!` → `-ENOMEM`), so check DAC before suspecting the data.
+  `ueventd.<device>.rc`: `0660 media audio`.
+- **Initialize the loader only once the sound card is up.** mediaserver
+  opens the HAL seconds before the dsp has booted, so the card is not in
+  `/proc/asound/cards` yet: cache nothing at open time (a NULL mixer
+  cached there makes the route a no-op while `pcm_open` still succeeds on
+  the later card), and defer the loader init too — initializing with no
+  codec ends in ADIE RTAC init `-ENOMEM`. Re-detect and open on first
+  stream.
+- **KitKat's tinyalsa `pcm_write`/`pcm_read` take BYTES, not frames.**
+  (`external/tinyalsa/pcm.c` divides the count by the frame size itself.)
+  Passing frames writes a quarter of every stereo 16-bit buffer, drops the
+  rest, and the dsp renders a chopped signal that can read as "silence with
+  a running PCM". The same API is `pcm_writei`-style frames in other
+  tinyalsa copies, so read the tree's own `pcm.c` before porting a HAL.
+- **Dynamic debug separates userspace from dsp.** Mount debugfs by hand on
+  these ports (`/d` is a symlink to `/sys/kernel/debug` but nothing mounts
+  it: `mount -t debugfs none /d`), then
+  `echo "file msm-pcm-q6-v2.c +p" > /sys/kernel/debug/dynamic_debug/control`
+  (plus `q6asm.c`, `q6adm.c`, `q6afe.c`, `msm-pcm-routing-v2.c`) and every
+  copy/cal/topology step lands in dmesg with byte counts — that is what
+  turned "the HAL is silent" into "the HAL wrote 1/4 of the buffer".
+- **A framework-level probe is worth its build time.** A tiny in-tree
+  `AudioTrack` tool (`audiotrack_test`, built by the device tree) exercises
+  AudioFlinger → HAL, which a tinyalsa tool cannot; pair it with a capture
+  and check the tone's energy band, not just "is there sound".
+
 ## Newer userspace beside the old one (taimen; assessed for maple)
 
 Taimen's port runs a 64-bit Android 11 chroot (`/system/v11`) next to

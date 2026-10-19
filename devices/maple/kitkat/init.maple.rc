@@ -268,6 +268,11 @@ service adsp_boot /system/bin/sh /sbin/adsp-boot.sh
     class core
     user root
     group root
+    # oneshot: without it init restarts the script every 5 s and each run
+    # re-writes /sys/kernel/boot_adsp/boot ("adsp_loader_do: scheduling
+    # work to load ADSP fw" spam, and the reload tramples live audio
+    # streams). The write itself is synchronous; one run is enough.
+    oneshot
     disabled
 
 # Wifi (Qualcomm WCN3990/cherokee, qca_cld3 built into the 4.4 kernel:

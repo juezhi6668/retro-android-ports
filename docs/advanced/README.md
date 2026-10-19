@@ -46,7 +46,9 @@ Step-by-step, from a pristine AOSP checkout to a flashable image:
   Lineage 22.1 closure) inside KitKat processes, with a 64-bit
   `fbpresentd` presenting through an MDSS atomic commit. Replaced the
   glrenderd chroot/socket design (sources in `tools/glrenderd/` are in
-  git history).
+  git history). Since 2026-10-19 the same loader also carries the Android 15
+  **ACDB audio calibration loader** for `audio.primary.maple` (speaker
+  playback verified on hardware).
 - [mkbootimg-cooper](software/mkbootimg-cooper.md) — pagesize-patched
   Donut `mkbootimg` that can pack cooper's boot.img.
 

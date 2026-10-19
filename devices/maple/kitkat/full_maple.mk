@@ -18,6 +18,10 @@ $(call inherit-product, $(SRC_TARGET_DIR)/product/generic.mk)
 # framework-res.apk on first boot (seen 2026-10-15: OutOfMemoryError in
 # JarUtils.verifySignature every life, dalvik-cache never populates).
 $(call inherit-product, frameworks/native/build/phone-xhdpi-2048-dalvik-heap.mk)
+# stock AOSP ringtones/alarms/ui effects (frameworks/base/data/sounds/AllAudio.mk):
+# without it /system/media/audio is empty, so there are no ringtones, no UI clicks,
+# and nothing for AudioFlinger to play through audio.primary.maple.
+$(call inherit-product, frameworks/base/data/sounds/AllAudio.mk)
 
 DEVICE_PACKAGE_OVERLAYS := vendor/sony/maple/overlay
 
@@ -116,6 +120,8 @@ PRODUCT_PACKAGES += \
     gralloc.default \
     libGLES_android \
     hybtest \
+    acdbtest \
+    audiotrack_test \
     rtc-restore \
     lights.maple \
     pdserve
@@ -131,6 +137,16 @@ ifneq ($(wildcard $(HYB_DIR)/root/vendor/lib/egl/libEGL_adreno.so),)
 PRODUCT_COPY_FILES += \
     $(foreach f,$(shell cd $(HYB_DIR)/root && find . -type f -printf '%P\n'),$(HYB_DIR)/root/$(f):system/a15/$(f)) \
     $(foreach f,$(shell cd $(HYB_DIR)/root/vendor/firmware && ls),$(HYB_DIR)/root/vendor/firmware/$(f):system/vendor/firmware/$(f))
+endif
+
+# ACDB calibration (2026-10-19): libacdbloader (staged into the a15 closure above,
+# loaded by audio.primary.maple through libhyb) builds its data path from
+# /sys/devices/soc0/hw_platform, which reads "MTP" on maple — so the yoshino
+# (Sony) calibration is staged as acdbdata/MTP and must land under that name.
+# Without it the AFE/ASM cal lookups fail and the dsp drains playback silently.
+ifneq ($(wildcard $(HYB_DIR)/acdbdata/MTP),)
+PRODUCT_COPY_FILES += \
+    $(foreach f,$(shell cd $(HYB_DIR)/acdbdata/MTP && ls),$(HYB_DIR)/acdbdata/MTP/$(f):system/vendor/etc/acdbdata/MTP/$(f))
 endif
 
 # fbpresentd: zero-copy presentation through an MDSS atomic commit (sources in fbpresentd/).

@@ -1,8 +1,8 @@
 /* audio.primary.maple — tinyalsa HAL for the Sony Xperia XZ Premium.
  *
  * Ported pattern from CHARQUIRKS audio (audio.primary.pdx203): playback,
- * capture and a usb-card fallback through the adsp, no acdb calibration,
- * decimator +20 dB so recording is usable. Card is msm8998-tavil-snd-card
+ * capture and a usb-card fallback through the adsp, decimator +20 dB so
+ * recording is usable. Card is msm8998-tavil-snd-card
  * (WCD9340 + WSA881x amps); speaker route taken from lineage's
  * mixer_paths_tasha.xml ("speaker" + "deep-buffer-playback" =
  * SLIMBUS_0_RX <- MultiMedia1, pcm 0), mic route from "handset-mic" /
@@ -12,8 +12,19 @@
  * Silent-safe: with no soundcard (card never probes yet — see
  * docs/devices/maple/quirks.md TEST 36) open succeeds and write discards / read
  * returns silence, so mediaserver stays up and audio starts working the
- * moment the card appears. No acdb: "cal_block not found" in dmesg is
- * harmless.
+ * moment the card appears.
+ *
+ * ACDB calibration (2026-10-19): without it q6asm rejects every stream
+ * ("send_afe_cal_type cal_block not found", "q6asm_send_cal: cal_block is
+ * NULL") and the dsp drains the buffer faster than realtime with no
+ * audible output. The loader that parses /vendor/etc/acdbdata is an
+ * Android 15 library (libacdbloader.so), so it is brought in through
+ * libhyb exactly like the Adreno driver. The HAL keeps the handle open
+ * for the life of mediaserver: the cal blocks live in the kernel and are
+ * dropped when the loader's /dev/msm_audio_cal fd closes. Before every
+ * stream start the HAL declares the device acdb id in the kernel's
+ * "Audio Stream 0 App Type Cfg" control and asks the loader for the
+ * matching blocks (speaker 15 for now; headset routing is future work).
  *
  * Ops-table discipline (learned the hard way 2026-10-16: mediaserver
  * SIGSEGV at AudioFlinger.cpp:1349 calling dev->init_check through NULL):
@@ -46,6 +57,8 @@
 #include <system/audio.h>
 #include <tinyalsa/asoundlib.h>
 
+#include "hyb.h"
+
 #define CARD_NAME_TASHA "msm8998-tasha-snd-card"
 #define CARD_NAME_TAVIL "msm8998-tavil-snd-card"
 /* Live 2026-10-16 the tasha card (sound-9335) wins the probe race and
@@ -60,6 +73,17 @@
 #define PLAYBACK_PERIOD_SIZE 1024
 #define PLAYBACK_PERIODS 4
 
+/* qcom HAL's DEFAULT_APP_TYPE_RX_PATH (hal/msm8974/platform.c) and
+ * ACDB_DEV_TYPE_OUT (linux/msm_audio_calibration.h). Speaker acdb id 15
+ * comes from the vendor audio_platform_info.xml acdb_ids table. */
+#define ACDB_APP_TYPE_RX 69936
+#define ACDB_DEV_TYPE_OUT 1
+#define ACDB_ID_SPEAKER 15
+
+typedef int (*acdb_init_fn)(char *card, char *cvd, int flag);
+typedef int (*acdb_send_fn)(int acdb_dev_id, int dev_type, int app_type,
+                            int sample_rate, int idx);
+
 struct maple_audio_device {
     struct audio_hw_device device;
     pthread_mutex_t lock;
@@ -67,6 +91,10 @@ struct maple_audio_device {
     unsigned int card;
     int out_open;
     int in_open;
+    const char *card_name;
+    void *acdb;
+    acdb_init_fn acdb_init;
+    acdb_send_fn acdb_send;
 };
 
 struct maple_stream_out {
@@ -189,6 +217,100 @@ static unsigned int find_card(const char *name)
     return card;
 }
 
+/* ---- ACDB calibration ------------------------------------------------ */
+
+/* mediaserver opens the HAL around 5 s but the tasha card registers at
+ * ~8 s (the adsp has to boot first), so adev_open can run before
+ * /proc/asound/cards lists the card. Opening the mixer there failed and
+ * the NULL was cached forever: the route was never written, pcm_open
+ * still succeeded (card 0 exists by then) and framework playback was
+ * silent while tone_test (own mixer) worked. Re-detect on first use. */
+static int ensure_card(struct maple_audio_device *adev)
+{
+    if (adev->mixer)
+        return 0;
+    adev->card = find_card(CARD_NAME_TASHA);
+    adev->card_name = CARD_NAME_TASHA;
+    adev->mixer = mixer_open(adev->card);
+    if (!adev->mixer) {
+        adev->card_name = CARD_NAME_TAVIL;
+        adev->mixer = mixer_open(find_card(CARD_NAME_TAVIL));
+    }
+    if (!adev->mixer)
+        return -ENODEV;
+    ALOGI("audio.primary.maple: late card %u (%s) mixer %p", adev->card,
+          adev->card_name, (void *)adev->mixer);
+    return 0;
+}
+
+/* Load libacdbloader (Android 15, via libhyb) and initialize it for the
+ * card that is now present. The cal blocks live in the kernel and stay
+ * until the loader's /dev/msm_audio_cal fd closes, so the handle is kept
+ * for the life of mediaserver. Only call with the card up: initializing
+ * before the codec exists fails in ADIE RTAC init with -ENOMEM. */
+static int acdb_ensure(struct maple_audio_device *adev)
+{
+    int r;
+    if (adev->acdb_send)
+        return 0;
+    if (ensure_card(adev))
+        return -ENODEV;
+    if (!adev->acdb) {
+        adev->acdb = hyb_dlopen("libacdbloader.so", 2 /* RTLD_NOW */);
+        if (!adev->acdb) {
+            ALOGE("acdb: libacdbloader not loadable: %s", hyb_dlerror());
+            return -ENOENT;
+        }
+        adev->acdb_init = (acdb_init_fn)hyb_dlsym(adev->acdb,
+                                                  "acdb_loader_init_v2");
+        adev->acdb_send = (acdb_send_fn)hyb_dlsym(adev->acdb,
+                                        "acdb_loader_send_audio_cal_v3");
+        if (!adev->acdb_init || !adev->acdb_send) {
+            ALOGE("acdb: loader symbols missing: %s", hyb_dlerror());
+            adev->acdb_send = NULL;
+            return -ENOENT;
+        }
+    }
+    r = adev->acdb_init((char *)adev->card_name, NULL, 0);
+    ALOGI("acdb: loader init(%s) = %d", adev->card_name, r);
+    if (r) {
+        adev->acdb_send = NULL;
+        return r;
+    }
+    return 0;
+}
+
+/* Declare the stream's device acdb id to the kernel and load the matching
+ * calibration blocks. Must run before the backend route opens the AFE
+ * port: afe_get_cal_topology_id()/send_afe_cal_type() look the blocks up
+ * when the port is enabled, and q6asm_send_cal() when the PCM opens. */
+static void acdb_stream_cal(struct maple_audio_device *adev, int acdb_id)
+{
+    struct mixer_ctl *ctl;
+    int cfg[3];
+    int r;
+
+    if (acdb_ensure(adev))
+        ALOGW("acdb: no calibration for this stream");
+    ctl = mixer_get_ctl_by_name(adev->mixer, "Audio Stream 0 App Type Cfg");
+    if (!ctl) {
+        ALOGE("acdb: no 'Audio Stream 0 App Type Cfg' control");
+    } else {
+        cfg[0] = ACDB_APP_TYPE_RX;
+        cfg[1] = acdb_id;
+        cfg[2] = PLAYBACK_RATE;
+        if (mixer_ctl_set_array(ctl, cfg, 3) < 0)
+            ALOGE("acdb: app type cfg write failed");
+    }
+    if (!adev->acdb_send) {
+        ALOGW("acdb: loader unavailable, stream runs uncalibrated");
+        return;
+    }
+    r = adev->acdb_send(acdb_id, ACDB_DEV_TYPE_OUT, ACDB_APP_TYPE_RX,
+                        PLAYBACK_RATE, 0);
+    ALOGV("acdb: send cal id %d -> %d", acdb_id, r);
+}
+
 static struct pcm_config pcm_config_out = {
     .channels = PLAYBACK_CHANNELS,
     .rate = PLAYBACK_RATE,
@@ -304,12 +426,12 @@ static ssize_t out_write(struct audio_stream_out *stream, const void *buffer,
 {
     struct maple_stream_out *out = (struct maple_stream_out *)stream;
     struct maple_audio_device *adev = out->adev;
-    size_t frames = bytes / (PLAYBACK_CHANNELS * sizeof(int16_t));
     int rc;
     pthread_mutex_lock(&out->lock);
     if (out->standby) {
         out->standby = 0;
         pthread_mutex_lock(&adev->lock);
+        acdb_stream_cal(adev, ACDB_ID_SPEAKER);
         speaker_path(adev->mixer, 1);
         pthread_mutex_unlock(&adev->lock);
         out->pcm = pcm_open(adev->card, PCM_PLAYBACK_DEVICE,
@@ -327,7 +449,12 @@ static ssize_t out_write(struct audio_stream_out *stream, const void *buffer,
         pthread_mutex_unlock(&out->lock);
         return bytes;
     }
-    rc = pcm_write(out->pcm, buffer, frames);
+    /* kitkat tinyalsa pcm_write() takes BYTES (it divides by the frame
+     * size itself), not frames: passing `frames` wrote a quarter of the
+     * mixer buffer and dropped the rest, which is why the dsp got a
+     * chopped signal and the speaker stayed silent while tone_test
+     * (same buffer math in frames) seemed fine. */
+    rc = pcm_write(out->pcm, buffer, bytes);
     if (rc != 0) {
         /* ADSP restart (modem RELATED restart) can invalidate the PCM
          * handle; drop it so the next write re-opens on the new card. */
@@ -469,12 +596,12 @@ static ssize_t in_read(struct audio_stream_in *stream, void *buffer,
     struct maple_stream_in *in = (struct maple_stream_in *)stream;
     struct maple_audio_device *adev = in->adev;
     struct pcm_config cfg;
-    size_t frames;
     int rc;
     pthread_mutex_lock(&in->lock);
     if (in->standby) {
         in->standby = 0;
         pthread_mutex_lock(&adev->lock);
+        ensure_card(adev);
         mic_path(adev->mixer, 1);
         pthread_mutex_unlock(&adev->lock);
         memset(&cfg, 0, sizeof(cfg));
@@ -498,8 +625,8 @@ static ssize_t in_read(struct audio_stream_in *stream, void *buffer,
         pthread_mutex_unlock(&in->lock);
         return bytes;
     }
-    frames = bytes / (in->channels * sizeof(int16_t));
-    rc = pcm_read(in->pcm, buffer, frames);
+    /* pcm_read() also takes bytes on kitkat tinyalsa */
+    rc = pcm_read(in->pcm, buffer, bytes);
     pthread_mutex_unlock(&in->lock);
     if (rc != 0)
         return -EIO;
@@ -752,6 +879,7 @@ static int adev_open(const hw_module_t *module, const char *name,
         return -ENOMEM;
     pthread_mutex_init(&adev->lock, NULL);
     adev->card = find_card(CARD_NAME_TASHA);
+    adev->card_name = CARD_NAME_TASHA;
     {
         /* find_card returns 0 both for "card 0" and "not found"; with a
          * single tasha card 0 is the right answer either way. Only look
@@ -768,8 +896,10 @@ static int adev_open(const hw_module_t *module, const char *name,
             }
             fclose(f);
         }
-        if (!seen)
+        if (!seen) {
             adev->card = find_card(CARD_NAME_TAVIL);
+            adev->card_name = CARD_NAME_TAVIL;
+        }
     }
     adev->mixer = mixer_open(adev->card);
     ALOGI("audio.primary.maple: card %u mixer %p", adev->card,

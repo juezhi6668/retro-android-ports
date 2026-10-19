@@ -110,7 +110,7 @@ KitKat `make` lies about staleness (product `.mk` edits don't retrigger
 targets) — delete outputs and rebuild, then verify content, never
 timestamps. `system.img` builds **sparse**; `simg2img` it before any `dd`.
 
-## 6. libhyb (hardware GL/GLES)
+## 6. libhyb (hardware GL/GLES + audio ACDB)
 
 The graphics stack is the in-process Adreno 540 driver
 ([libhyb](../software/libhyb.md)): the *device tree* carries the loader,
@@ -130,9 +130,14 @@ make bootimage systemimage
 runtime `dlopen` modules and the a540 firmware, and lists what it staged,
 what KitKat provides itself and what is missing — a missing entry that is
 not `libc/libm/libdl/liblog/libcutils/libz` (nor the virtual
-`ld-android`/`libdl_android`) means the closure is incomplete. Skipping
-the whole step is supported: without the closure the EGL shims fail their
-load and EGL falls back to the ES1-only `libagl` software path.
+`ld-android`/`libdl_android`) means the closure is incomplete. It also
+stages the **audio ACDB** consumer (`libacdbloader.so` + its closure) and
+copies the yoshino acdb data to `acdbdata/MTP/`, which `full_maple.mk`
+installs to `/system/vendor/etc/acdbdata/MTP/` (the name
+`/sys/devices/soc0/hw_platform` reports). Skipping the whole step is
+supported: without the closure the EGL shims fail their load and EGL falls
+back to the ES1-only `libagl` software path, and the audio HAL runs
+uncalibrated (silent).
 
 Rebuild the images after re-staging, and re-stage after changing any
 device-tree graphics source — see the staging rules in

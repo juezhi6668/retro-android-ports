@@ -29,6 +29,12 @@ SEARCH = [
     ("system/lib", sysroot + "/system/lib"),
     ("system/lib", sysroot + "/apexlib"),
 ]
+# audio calibration: KitKat's audio HAL loads libacdbloader.so through libhyb and
+# pushes the tasha acdb blocks into /dev/msm_audio_cal (the loader itself is an
+# Android 15 32-bit library, same as the Adreno driver). Its DT_NEEDED closure
+# brings libaudcal/libacdbrtac/libacdb-fts/libadiertac/libmiscta/libdiag and the
+# vendor libtinyalsa.
+ACDB = ["libacdbloader.so"]
 # dlopened by name, never in DT_NEEDED. missing ones only cost a failed dlopen
 DLOPENED = ["eglSubDriverAndroid.so", "libq3dtools_adreno.so", "libadreno_app_profiles.so"]
 # the a540 microcode, gpmu and zap shader; kgsl loads them from /vendor/firmware
@@ -86,6 +92,7 @@ def walk(queue):
 if os.path.exists(hyb):
     shutil.rmtree(hyb)
 walk(ROOTS)
+walk(ACDB)
 walk([n for n in DLOPENED if find(n)[1]])
 
 # eglInitialize hard fails unless the android subdriver gets a gralloc module. there's no
@@ -97,6 +104,20 @@ if not gralloc:
     sys.exit("no vendor/lib/hw/gralloc.*.so in the sysroot")
 copy(gralloc[0], "vendor/lib/hw/gralloc.default.so")
 walk(needed(gralloc[0]))
+
+# the calibration data itself: /sys/devices/soc0/hw_platform reads "MTP" on
+# maple, and libacdbloader builds /vendor/etc/acdbdata/<hw_platform>/ from it, so
+# the yoshino (Sony) files have to sit under that form-factor name. Staged next
+# to root/ (not inside) because full_maple.mk copies them to /system/vendor/etc,
+# not into the /system/a15 closure.
+acdb_src = os.path.join(sysroot, "vendor/etc/acdbdata/Sony")
+acdb_dst = os.path.join(hyb, "acdbdata/MTP")
+if os.path.isdir(acdb_src):
+    shutil.copytree(acdb_src, acdb_dst, dirs_exist_ok=True)
+    print(f"acdbdata ({len(os.listdir(acdb_dst))} files): Sony/ -> acdbdata/MTP/")
+else:
+    print("no vendor/etc/acdbdata/Sony in the sysroot, audio will run uncalibrated",
+          file=sys.stderr)
 
 fw = []
 for pat in FIRMWARE:

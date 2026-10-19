@@ -16,3 +16,11 @@ LOCAL_SRC_FILES := hybtest.c
 LOCAL_CFLAGS := -std=gnu99 -O2
 LOCAL_SHARED_LIBRARIES := libhyb liblog
 include $(BUILD_EXECUTABLE)
+
+include $(CLEAR_VARS)
+LOCAL_MODULE := acdbtest
+LOCAL_MODULE_TAGS := optional
+LOCAL_SRC_FILES := acdbtest.c
+LOCAL_CFLAGS := -std=gnu99 -O2
+LOCAL_SHARED_LIBRARIES := libhyb liblog
+include $(BUILD_EXECUTABLE)
