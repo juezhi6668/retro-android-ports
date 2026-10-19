@@ -662,6 +662,15 @@ TEST 50; the HAL is
   headphones 10, TX headset mic 8 from `platform.c`'s
   `acdb_device_table[]`), but mark the headset-mic path verify-me until a
   jack source exists.
+- **`ACDB AFE returned = -19` on a speaker cal send is benign.** The
+  Android 15 loader logs `Failed to fetch the lookup information of the
+  device 0000000F` + `ACDB_CMD_GET_AFE_COMMON_TABLE_SIZE Returned = -19`
+  / `ACDB AFE returned = -19` for dev 15 on every send and then continues
+  with `AUDIO_SET_AFE_CAL` and `send_hw_delay`; the yoshino MTP acdbdata
+  simply has no AFE common table for that device. Verified non-fatal
+  (maple: the same pair appears in runs whose audio loops back at full
+  level, e.g. TEST 52's video). Don't chase it as a calibration failure —
+  the applied AFE cal is the topology one.
 
 ## Media decode lessons (maple, 2026-10-19)
 
@@ -700,8 +709,12 @@ TEST 50; the HAL is
   components, matching the 17 soft-codec libraries in the image): Music's
   AudioPreview plays mp3 and ogg through the HAL (route + acdb, no
   `MediaPlayer: error`), a DMIC loopback of a 440 Hz mp3 reads 440.00 Hz,
-  and a UI click plays with no SoundPool error. Maple TEST 52. Video
-  output with the now-enabled software decoders is still untested.
+  and a UI click plays with no SoundPool error. Video too: Gallery's
+  `MovieActivity` on a h264+AAC clip creates `OMX.google.h264.decoder`,
+  renders the test pattern full-screen (`MediaPlayer: info/warning (3,
+  0)` = MEDIA_INFO_VIDEO_RENDERING_START) and loops its 880 Hz track
+  back through the HAL at **880.00 Hz** — decoder, GL composition and
+  audio sink all in one test. Maple TEST 52.
 
 ## Newer userspace beside the old one (taimen; assessed for maple)
 

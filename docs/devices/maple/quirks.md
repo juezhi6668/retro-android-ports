@@ -2112,6 +2112,26 @@ Next actions (checkboxes for the log):
       (`route out 0x2 -> speaker (acdb 15)`) and logs neither
       `SoundPool: Unable to load sample` nor `onLoadSoundEffects(),
       Error -22` (both were the pre-fix symptom).
+    - **Video (same fix).** Gallery `MovieActivity` on
+      `file:///sdcard/testvid10.mp4` (ffmpeg `testsrc` 320×240, h264
+      Baseline + 880 Hz AAC) → `OMXCodec: [OMX.google.h264.decoder] AVC
+      profile = 66 (Baseline), level = 12 / video dimensions are 320 x
+      240`, `SoftAAC2: Reconfiguring decoder: 0->44100 Hz`, `MediaPlayer:
+      info/warning (3, 0)` (= MEDIA_INFO_VIDEO_RENDERING_START), HAL
+      `route out 0x2 -> speaker (acdb 15)` + cal 15/`112fc`. A screenshot
+      taken mid-playback shows the testsrc pattern (colour bars + circle)
+      scaled full-screen to 1080×1920 with letterboxing, and the DMIC
+      loopback of the track reads **880.00 Hz** (rms 182) — so the
+      software h264 decoder, the GL composition path and the audio track
+      all work together.
+    - `ACDB_CMD_GET_AFE_COMMON_TABLE_SIZE` / `ACDB AFE returned = -19`
+      with `Failed to fetch the lookup information of the device
+      0000000F` is **benign** here: the loader logs it on every speaker
+      cal send and continues with `AUDIO_SET_AFE_CAL` — the successful
+      video run shows the same pair (the yoshino MTP acdbdata has no AFE
+      common table for dev 15; the AFE cal that is applied is the
+      topology/`send_afe_cal` one, and the sound loops back at full
+      level).
     - The first flash attempt aborted mid-way when TWRP dropped off USB
       for ~10 minutes; the battery read 100 % when TWRP came back, so
       that was a TWRP/USB crash, not a low battery. The second run
@@ -2119,7 +2139,7 @@ Next actions (checkboxes for the log):
   - **Port implication.** The "speaker audio" status the port carried
     was *raw-PCM-only*: ringtones, notification/alarm sounds, UI clicks
     and music (all ogg/mp3 in KitKat) could never play. The same missing
-    file also disables *video* decode (no h264/vpx components), so video
-    playback was impossible too — the XML enables the software
-    decoders, but whether the port's video output path survives is a
-    separate [verify-me] test.
+    file also disabled *video* decode (no h264/vpx components), so the
+    port could not play video either; with the XML shipped, both are
+    verified (above). A KitKat port that has no OEM codec list must
+    supply its own.
