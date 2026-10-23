@@ -17,7 +17,7 @@ generalize across devices of that era.
 | Release | AOSP branch | Notes | Ported to |
 | --- | --- | --- | --- |
 | Donut 1.6 | `android-1.6_r2` (DRD35) | [porting-notes/donut.md](porting-notes/donut.md) | [cooper](../devices/cooper/README.md), [maple](../devices/maple/README.md) |
-| KitKat 4.4.4 | `android-4.4.4_r2` (KTU84Q) | [porting-notes/kitkat.md](porting-notes/kitkat.md) | [maple](../devices/maple/README.md), [poplar](../devices/poplar/README.md) |
+| KitKat 4.4.4 | `android-4.4.4_r2` (KTU84Q) | [porting-notes/kitkat.md](porting-notes/kitkat.md) | [maple](../devices/maple/README.md), [poplar](../devices/poplar/README.md), [sagit](../devices/sagit/README.md) (skeleton) |
 
 Planned playbooks (not written yet — they land with the first port of each
 release): Eclair, Froyo, Gingerbread, Ice Cream Sandwich, Jelly Bean (4.1–4.3),

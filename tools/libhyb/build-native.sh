@@ -2,14 +2,16 @@
 # Builds the libhyb side with the Android NDK r21e:
 #  - fbpresentd, the 64-bit MDSS atomic-commit presenter (KitKat's build system only produces
 #    32-bit binaries, and the kernel's 32-bit compat path for MSMFB_ATOMIC_COMMIT crashes).
-# The result is staged out-of-git for full_maple.mk at vendor/sony/maple-bin/fbpresentd.
+# The result is staged out-of-git for full_<device>.mk at vendor/<vendor>/<device>-bin/fbpresentd.
 #
-#   tools/libhyb/build-native.sh <aosp dir>        (NDK=<path to android-ndk-r21e> to reuse one)
+#   tools/libhyb/build-native.sh <aosp dir> [vendor/device]
+#       (default device dir: sony/maple; NDK=<path to android-ndk-r21e> to reuse one)
 set -euo pipefail
 
-AOSP=$(realpath "${1:?usage: $0 <aosp dir>}")
-SRC=$AOSP/vendor/sony/maple
-DEST=$AOSP/vendor/sony/maple-bin
+AOSP=$(realpath "${1:?usage: $0 <aosp dir> [vendor/device]}")
+DEV=${2:-sony/maple}
+SRC=$AOSP/vendor/$DEV
+DEST=$AOSP/vendor/${DEV%%/*}/${DEV##*/}-bin
 # Cache the NDK OUTSIDE $AOSP: the AOSP make walks the tree for Android.mk
 # files and the NDK's own sources/android/cpufeatures/Android.mk collides
 # with the tree's ndk/ copy ("MODULE.TARGET.STATIC_LIBRARIES.cpufeatures
@@ -21,7 +23,7 @@ CACHE=${CACHE:-$HOME/.cache/retro-android-ports/ndk}
 NDK_URL=https://dl.google.com/android/repository/android-ndk-r21e-linux-x86_64.zip
 NDK_SHA1=c3ebc83c96a4d7f539bd72c241b2be9dcd29bda9
 
-[ -d "$SRC" ] || { echo "$SRC not found: sync the device tree first (scripts/sync-device-tree.sh maple)" >&2; exit 1; }
+[ -d "$SRC" ] || { echo "$SRC not found: sync the device tree first (scripts/sync-device-tree.sh ${DEV##*/})" >&2; exit 1; }
 
 if [ -z "${NDK:-}" ]; then
     NDK=$CACHE/android-ndk-r21e

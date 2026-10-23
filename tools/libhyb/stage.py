@@ -4,9 +4,9 @@
 # and pulls each library from the sysroot (vendor first, then lineage's system, then the apex
 # libs). the gpu firmware goes in too.
 # usage: stage.py <sysroot from extract-lineage.sh> <out dir>
-# the out dir gets root/, and is what full_maple.mk copies to /system/a15.
-# keep it at $AOSP_DIR/vendor/sony/maple-hyb, sync-device-tree.sh's rsync --delete owns
-# vendor/sony/maple only.
+# the out dir gets root/, and is what full_<device>.mk copies to /system/a15.
+# keep it at $AOSP_DIR/vendor/<vendor>/<device>-hyb, sync-device-tree.sh's rsync
+# --delete owns vendor/<vendor>/<device> only.
 import glob
 import os
 import shutil
@@ -97,7 +97,8 @@ walk([n for n in DLOPENED if find(n)[1]])
 
 # eglInitialize hard fails unless the android subdriver gets a gralloc module. there's no
 # hwbinder for the mapper, so it falls back to hw_get_module, which ends up at gralloc.default
-# the qcom one (gralloc.msm8998 on maple), never a stock gralloc.default the vendor might carry
+# the qcom one (gralloc.msm8998 on maple, gralloc.sagit or gralloc.default on
+# Mi 6), never a stock gralloc.default the vendor might carry
 gralloc = sorted(g for g in glob.glob(sysroot + "/vendor/lib/hw/gralloc.*.so")
                  if not g.endswith("/gralloc.default.so"))
 if not gralloc:
@@ -105,19 +106,32 @@ if not gralloc:
 copy(gralloc[0], "vendor/lib/hw/gralloc.default.so")
 walk(needed(gralloc[0]))
 
-# the calibration data itself: /sys/devices/soc0/hw_platform reads "MTP" on
-# maple, and libacdbloader builds /vendor/etc/acdbdata/<hw_platform>/ from it, so
-# the yoshino (Sony) files have to sit under that form-factor name. Staged next
-# to root/ (not inside) because full_maple.mk copies them to /system/vendor/etc,
-# not into the /system/a15 closure.
-acdb_src = os.path.join(sysroot, "vendor/etc/acdbdata/Sony")
+# the calibration data itself: libacdbloader builds /vendor/etc/acdbdata/<hw_platform>/
+# from /sys/devices/soc0/hw_platform, so the ROM's acdb blocks have to sit under that
+# form-factor name on the device. maple reads "MTP"; a Mi 6 ROM may ship the blocks in
+# MTP/, QRD/, or loose under acdbdata/, so pick whatever the sysroot actually has and
+# stage it as acdbdata/MTP/ (verify the name live: cat /sys/devices/soc0/hw_platform).
+# Staged next to root/ (not inside) because full_<device>.mk copies them to
+# /system/vendor/etc, not into the /system/a15 closure.
+acdb_root = os.path.join(sysroot, "vendor/etc/acdbdata")
+acdb_src = None
+if os.path.isdir(acdb_root):
+    if os.path.isdir(os.path.join(acdb_root, "MTP")):
+        acdb_src = os.path.join(acdb_root, "MTP")
+    else:
+        dirs = sorted(d for d in glob.glob(acdb_root + "/*") if os.path.isdir(d))
+        if len(dirs) == 1:
+            acdb_src = dirs[0]
+        elif glob.glob(acdb_root + "/*.acdb"):
+            acdb_src = acdb_root
 acdb_dst = os.path.join(hyb, "acdbdata/MTP")
-if os.path.isdir(acdb_src):
+if acdb_src:
     shutil.copytree(acdb_src, acdb_dst, dirs_exist_ok=True)
-    print(f"acdbdata ({len(os.listdir(acdb_dst))} files): Sony/ -> acdbdata/MTP/")
+    print(f"acdbdata ({len(os.listdir(acdb_dst))} files): "
+          f"{os.path.relpath(acdb_src, sysroot)}/ -> acdbdata/MTP/")
 else:
-    print("no vendor/etc/acdbdata/Sony in the sysroot, audio will run uncalibrated",
-          file=sys.stderr)
+    print(f"no acdb blocks under {os.path.relpath(acdb_root, sysroot)}/ in the sysroot, "
+          "audio will run uncalibrated (pick the right subdir by hand)", file=sys.stderr)
 
 fw = []
 for pat in FIRMWARE:

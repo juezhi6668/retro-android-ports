@@ -1,0 +1,26 @@
+# ueventd.sagit.rc — KitKat for Xiaomi Mi 6
+# Node ownership for first bringup. Extend from a live `ls -l /dev` +
+# stock ueventd rules once the 4.4 kernel is probed (maple did the same).
+
+/dev/msm_snd              0660   system     audio
+/dev/msm_pcm_out          0660   system     audio
+/dev/msm_pcm_in           0660   system     audio
+/dev/msm_pcm_ctl          0660   system     audio
+/dev/uinput               0660   system     bluetooth
+/dev/video0               0660   system     camera
+/dev/graphics/fb0         0660   system     graphics
+
+# GPU + ION: the Android 15 Adreno driver (libhyb) and QTI gralloc are opened
+# directly, in surfaceflinger (system), in every GL app process (u0_aNN) and by
+# zygote's preloadOpenGL. The kernel creates both nodes root:root 0600, so
+# open() failed EACCES and surfaceflinger aborted with "no suitable EGLConfig
+# found" (maple). 0666 because the callers span system/u0_aNN/root and this
+# port runs SELinux permissive, so DAC is the whole story.
+/dev/kgsl-3d0             0666   root       root
+/dev/ion                  0666   root       root
+
+# ACDB calibration: audio.primary.sagit (mediaserver, uid media) loads
+# libacdbloader through libhyb; the loader opens /dev/msm_audio_cal and pushes
+# the Mi 6 acdb blocks into the kernel where q6asm/q6afe look them up. Created
+# root:root 0600 by the driver — without this, playback stays silent.
+/dev/msm_audio_cal       0660   media      audio

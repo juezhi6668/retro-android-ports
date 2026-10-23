@@ -1,0 +1,14 @@
+# fstab.sagit — KitKat (GPT/ext4, UFS)
+# Block paths: ueventd on the 4.4 kernel creates them under
+# /dev/block/platform/soc/by-name/* (maple-verified for msm8998). KitKat has
+# no /dev/block/bootdevice/ — that symlink is made by newer init.rc.
+# verify-me on THIS phone: `adb shell ls -l /dev/block/platform/soc/*/by-name`
+# (TWRP: ls -l /dev/block/bootdevice/by-name). If the by-name level is missing,
+# use the platform dir it does expose, e.g.
+# /dev/block/platform/soc/1da4000.ufshc/by-name/system — and mirror the same
+# change in init.sagit.rc.
+/dev/block/platform/soc/by-name/system   /system  ext4  ro                                                              wait
+/dev/block/platform/soc/by-name/userdata /data    ext4  nosuid,nodev,noatime,nodiratime,nobarrier,noauto_da_alloc        wait,check,encryptable=footer
+/dev/block/platform/soc/by-name/cache    /cache   ext4  nosuid,nodev,noatime,nodiratime,nobarrier                        wait,check
+/dev/block/platform/soc/by-name/persist  /persist ext4  nosuid,nodev,barrier=1                                          wait,notrim
+# No sdcard row: the Mi 6 has no microSD slot (maple's row managed sdcard1).

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- KitKat on Mi 6: on-screen navigation is ON for the first bringup so
+     there is always a way to navigate, whatever the capacitive-key situation
+     turns out to be (Mi 6 reports back/menu/home from the Synaptics panel —
+     verify with `getevent`). Once hardware keys are confirmed working, set
+     this to false to reclaim the screen space (maple/poplar use true because
+     neither has capacitive keys). -->
+<resources>
+    <bool name="config_showNavigationBar">true</bool>
+</resources>

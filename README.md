@@ -32,11 +32,13 @@ is the oldest release that can still be synced. The full story — and why a
 | Sony Xperia XZ Premium G8141/G8142 | `maple` | KitKat 4.4.4 (KTU84Q) | Boots to UI; touch, display, USB adb, hardware GL/GLES 3.2 (Adreno 540 in-process via libhyb, 59–60 fps, verified 2026-10-19), brightness/sleep, emulated storage, **playback + capture + headset/headphone routing through the audio HAL** (ACDB calibration from the Android 15 loader, in-process via libhyb; routing driven by AudioPolicyManager's `routing=`; verified 2026-10-19; decoded ogg/mp3 too — TEST 52, a DMIC loopback of a 440 Hz mp3 reads 440.00 Hz; video plays as well: software h264 via Gallery, test pattern rendered full-screen + 880 Hz track looped back). WiFi interface still open: SERVREG_LOC now served in-tree by `pdserve` and the PDR chain (icnss) registers its notifier, but the modem root PD crashes every ~41 s before wlan_pd/WLFW can start (modem stability/keepalive open). [Device page](docs/devices/maple/README.md) |
 | Sony Xperia XZ Premium G8141/G8142 | `maple` | Donut 1.6 (DRD35) | Boots to launcher; touch (stable from ~6.5 s, `vtouch` v1.2.0-maple3), tap-to-unlock keyguard, camera half-press → BACK / full-press → MENU, volume keys, readable key character maps (Settings works), portrait orientation. No audio/WiFi/cellular/camera HAL yet. [Device page](docs/devices/maple/README.md) |
 | Sony Xperia XZ1 G8341/G8342 | `poplar` | KitKat 4.4.4 (KTU84Q) | Boots to UI (launcher + nav bar, touch, display, USB adb, HW GL via glrenderd). Same yoshino/MSM8998 platform as maple; tree predates maple TEST 36-37. [Device page](docs/devices/poplar/README.md) |
+| Xiaomi Mi 6 | `sagit` | KitKat 4.4.4 (KTU84Q) | **Skeleton, not yet built** — device tree derived from maple (same MSM8998/Adreno 540), with Mi-6 deltas: no microSD, Synaptics DSX touch, tasha-only audio, no vendor partition; every hardware fact is a `VERIFY-ME` resolved by `scripts/dump-sagit-stock.sh`. [Device page](docs/devices/sagit/README.md) |
 
 Each device has a main page (description, per-release status, links) and a
 **quirks** page (everything needed to port to that device — flash layout,
 verified fixes, open gaps): [cooper](docs/devices/cooper/quirks.md),
-[maple](docs/devices/maple/quirks.md), [poplar](docs/devices/poplar/quirks.md).
+[maple](docs/devices/maple/quirks.md), [poplar](docs/devices/poplar/quirks.md),
+[sagit](docs/devices/sagit/quirks.md).
 
 Release zips: [GitHub Releases](https://github.com/pukikiko/retro-android-ports/releases)
 (cooper assets are named `full_cooper-*`; maple images are built locally —
@@ -72,7 +74,7 @@ docs/advanced/build-server.md      remote build-host runbook
 docs/advanced/software/            project-made software (vtouch, libhyb, mkbootimg-cooper)
 docs/devices/<codename>/README.md  device main page: description, status, links
 docs/devices/<codename>/quirks.md  device quirks: everything needed to port to it
-scripts/                           build + packaging + device-tree sync (+ dump-maple-stock.sh, patch-maple-dtb.py)
+scripts/                           build + packaging + device-tree sync (+ dump/patch scripts per device)
 containers/<release>/              period build-container recipes (kitkat/)
 tools/                             project-made tools (mkbootimg-cooper, libhyb staging/closure)
 reference/                         third-party trees/images kept for board parameters
@@ -172,6 +174,12 @@ Each release has its own end-to-end guide; the README stays short:
       into `patches/kitkat/`, and port the
       [libhyb](docs/advanced/software/libhyb.md) stack (poplar still builds the
       removed glrenderd design, see its README).
+- [ ] KitKat 4.4.4 on `sagit` (Xiaomi Mi 6, same MSM8998/Adreno 540 as
+      maple): device tree scaffolded as `devices/sagit/kitkat/` with
+      Mi-6 deltas (no microSD, Synaptics DSX touch, tasha-only audio, no
+      vendor partition); nothing built or booted yet. Next: dump stock
+      facts with `scripts/dump-sagit-stock.sh`, resolve the `VERIFY-ME`
+      markers, stage the Lineage 22.1 closure + kernel, then first boot.
 - [ ] Other releases on newer hardware — Eclair/Froyo next (Gingerbread
       through Nougat planned; Cupcake is impossible, source gone).
 
