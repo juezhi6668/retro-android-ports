@@ -1,0 +1,103 @@
+# init.sagit.rc — MIUI 4.1.2 (mione_plus, SDK 16) on Xiaomi Mi 6
+# (MSM8998, UFS/GPT/ext4, 4.4.247 kernel).
+#
+# Overlaid onto the KitKat port's ramdisk by scripts/build-sagit-jb-boot.py:
+# init/adbd/ueventd/healthd and init.rc stay 4.4 (they match the kernel and
+# already boot on this phone), only the device hook and the boot classpath
+# are swapped for the Jelly Bean userland.
+#
+# Differences from devices/sagit/kitkat/init.sagit.rc:
+#   - no fbpresentd/pdserve/rtc-restore/bootlog: those binaries exist only in
+#     the KitKat system image
+#   - no modem_hold: the MIUI tree ships brcm wifi firmware only, no PIL blobs
+#   - sdcard takes Jelly Bean's positional args (4.1: `sdcard [-l -f] <path>
+#     <uid> <gid>`, mount point hardcoded /storage/sdcard0), not KitKat's
+#     `-u uid -g gid -l <src> <dst>`
+#   - no wpa_supplicant/dhcpcd service stanzas: the JB wifi stack (msm8660
+#     libs) does not talk to this kernel's qca_cld3 anyway
+#   - 4.1 storage layout: /storage/sdcard0 + /sdcard and /mnt/sdcard symlinks
+
+import /init.sagit.usb.rc
+
+on init
+    # PERMISSIVE: 4.4 policy has no labels for a 4.1.2 tree; enforcing would
+    # bury the boot in denials (same posture as the KitKat port)
+    setenforce 0
+
+# system
+on init
+    mount ext4 /dev/block/platform/soc/by-name/system /system ro wait
+on init
+    mount ext4 /dev/block/platform/soc/1da4000.ufshc/by-name/system /system ro wait
+# Measured 2026-10-24 on the stock ROM: system=sda18, userdata=sda17,
+# cache=sda16, persist=sda14. ueventd's layout decides which path exists.
+
+# qcom subsystem safety: a dsp crash must not panic the phone
+on init
+    write /sys/bus/msm_subsys/devices/subsys0/restart_level RELATED
+    write /sys/bus/msm_subsys/devices/subsys1/restart_level RELATED
+    write /sys/bus/msm_subsys/devices/subsys2/restart_level RELATED
+    write /sys/bus/msm_subsys/devices/subsys3/restart_level RELATED
+    write /sys/bus/msm_subsys/devices/subsys4/restart_level RELATED
+    write /sys/bus/msm_subsys/devices/subsys5/restart_level RELATED
+    write /sys/bus/msm_subsys/devices/subsys6/restart_level RELATED
+
+# data / cache / persist
+on init
+    mount ext4 /dev/block/platform/soc/by-name/userdata /data nosuid nodev noatime nodiratime wait noauto_da_alloc,barrier=0
+on init
+    mount ext4 /dev/block/platform/soc/1da4000.ufshc/by-name/userdata /data nosuid nodev noatime nodiratime wait noauto_da_alloc,barrier=0
+on init
+    mount ext4 /dev/block/platform/soc/by-name/cache /cache nosuid nodev noatime nodiratime wait noauto_da_alloc,barrier=0
+on init
+    mount ext4 /dev/block/platform/soc/1da4000.ufshc/by-name/cache /cache nosuid nodev noatime nodiratime wait noauto_da_alloc,barrier=0
+on init
+    mount ext4 /dev/block/platform/soc/by-name/persist /persist nosuid nodev wait barrier=1
+on init
+    mount ext4 /dev/block/platform/soc/1da4000.ufshc/by-name/persist /persist nosuid nodev wait barrier=1
+
+on init
+    mkdir /cache 0770 system cache
+    mkdir /persist 0771 system system
+    mkdir /data/misc 01771 system misc
+    mkdir /data/misc/wifi 0770 wifi wifi
+    mkdir /data/misc/wifi/sockets 0770 wifi wifi
+    mkdir /data/misc/dhcp 0770 dhcp dhcp
+    mkdir /data/local/tmp 0771 shell shell
+    mkdir /data/dalvik-cache 0771 system system
+    chmod 0755 /sbin/autowinch.sh
+
+# 4.1 uses a single user and a FUSE daemon on /data/media
+on init
+    mkdir /storage 0751 root sdcard_r
+    mkdir /storage/sdcard0 0775 root sdcard_r
+    symlink /storage/sdcard0 /sdcard
+    symlink /storage/sdcard0 /mnt/sdcard
+
+on post-fs-data
+    mkdir /data/media 0770 media_rw media_rw
+    write /sys/module/firmware_class/parameters/path /vendor/firmware
+    start adsp_boot
+    start autowinch
+
+on boot
+    start adbd
+    start usbudc
+
+# bootloop guard: reboots to TWRP only if the boot never comes alive
+service autowinch /sbin/autowinch.sh
+    user root
+    oneshot
+    disabled
+
+# Jelly Bean sdcard daemon: positional uid/gid, mounts at /storage/sdcard0
+service sdcard /system/bin/sdcard /data/media 1023 1023
+    class main
+
+# ADSP boot (no firmware needed; resolves the subsystem by name)
+service adsp_boot /system/bin/sh /sbin/adsp-boot.sh
+    class core
+    user root
+    group root
+    oneshot
+    disabled

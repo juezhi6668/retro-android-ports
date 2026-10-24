@@ -12,6 +12,8 @@
 #include <fcntl.h>
 #include <linux/fb.h>
 #include <pthread.h>
+#include <stdarg.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
@@ -28,6 +30,34 @@
 #define __user
 #include "mdss/msm_mdp_ext.h"
 #include "../hyb/hyb.h"
+
+/* direct /dev/kmsg logging: ALOGx output of the shims does not reach dmesg on the MIUI
+ * image (cause unknown, 2026-10-24), so diagnostics bypass liblog entirely */
+static int s_kfd = -1;
+static int s_klog_n = 40;
+
+static void klog(const char *fmt, ...)
+{
+    char b[280];
+    va_list ap;
+    int n;
+    if (s_klog_n <= 0)
+        return;
+    s_klog_n--;
+    if (s_kfd < 0)
+        s_kfd = open("/dev/kmsg", O_WRONLY);
+    if (s_kfd < 0)
+        return;
+    va_start(ap, fmt);
+    n = vsnprintf(b, sizeof(b) - 1, fmt, ap);
+    va_end(ap);
+    if (n > 0) {
+        if (n > (int)sizeof(b) - 2)
+            n = (int)sizeof(b) - 2;
+        b[n++] = '\n';
+        write(s_kfd, b, (size_t)n);
+    }
+}
 
 /* ------------------------------------------------------------------ gralloc1 QTI */
 static gralloc1_device_t *g1;
@@ -51,11 +81,13 @@ static void g1_init(void)
     void *so = hyb_dlopen("/vendor/lib/hw/gralloc.default.so", 0);
     struct hw_module_t *hmi = so ? hyb_dlsym(so, "HMI") : NULL;
     if (!hmi) {
+        klog("grshim: g1_init FAIL dlopen: %s", hyb_dlerror());
         ALOGE("gralloc.default (QTI gralloc1) not found: %s", hyb_dlerror());
         return;
     }
     struct hw_device_t *dev = NULL;
     if (hmi->methods->open(hmi, GRALLOC_HARDWARE_MODULE_ID, &dev) || !dev) {
+        klog("grshim: g1_init FAIL open (QTI gralloc1)");
         ALOGE("cannot open the QTI gralloc1");
         return;
     }
@@ -77,6 +109,7 @@ static void g1_init(void)
     GET(g1_unlock, G1_PFN_UNLOCK, G1_UNLOCK);
 #undef GET
     g1 = d;
+    klog("grshim: g1_init ok");
     ALOGI("QTI gralloc1 ready");
 }
 
@@ -175,8 +208,14 @@ static native_handle_t *clone_handle(buffer_handle_t h)
 
 static int do_register(buffer_handle_t h)
 {
-    if (!ready() || !valid(h))
+    if (!ready())
         return -EINVAL;
+    if (!valid(h)) {
+        klog("grshim: register invalid h=%p nfds=%d nints=%d i0=%08x i1=%08x", h,
+             h ? h->numFds : -1, h ? h->numInts : -1,
+             h ? (unsigned)h->data[h->numFds] : 0, h ? (unsigned)h->data[h->numFds + 1] : 0);
+        return -EINVAL;
+    }
     /* base and base_metadata come through binder with addresses of the allocating process:
      * zero them, as the QTI import does, so that libqdMetaData (video codecs) maps the
      * metadata itself instead of writing to a foreign address */
@@ -191,6 +230,7 @@ static int do_register(buffer_handle_t h)
     native_handle_t *c = clone_handle(h);
     int r = c ? g1_retain(g1, c) : -ENOMEM;
     if (r) {
+        klog("grshim: retain refused %d h=%p", r, h);
         ALOGE("buffer import refused: %d", r);
         if (c) {
             native_handle_close(c);
@@ -207,16 +247,20 @@ static int do_register(buffer_handle_t h)
 /* matching QTI handle (for the Adreno driver); imported on the fly when needed */
 buffer_handle_t sagit_gralloc_import(buffer_handle_t h)
 {
-    if (!h || !ready())
+    if (!h || !ready()) {
+        klog("grshim: import refused: %s", !h ? "null handle" : "gralloc1 not ready");
         return NULL;
+    }
     pthread_mutex_lock(&s_map_lock);
     struct entry *e = find_locked(h);
     buffer_handle_t q = e ? e->qti : NULL;
     pthread_mutex_unlock(&s_map_lock);
     if (q)
         return q;
-    if (do_register(h))
+    if (do_register(h)) {
+        klog("grshim: import refused: registration failed h=%p", h);
         return NULL;
+    }
     pthread_mutex_lock(&s_map_lock);
     e = find_locked(h);
     q = e ? e->qti : NULL;
@@ -297,8 +341,10 @@ static int gr_unlock(gralloc_module_t const *m, buffer_handle_t h)
 /* ------------------------------------------------------------------ allocator */
 static int alloc_buffer(int w, int h, int format, int usage, buffer_handle_t *out, int *stride)
 {
-    if (!ready())
+    if (!ready()) {
+        klog("grshim: alloc %dx%d FAIL gralloc1 not ready", w, h);
         return -ENODEV;
+    }
     uint64_t p, c;
     usage_split(usage, &p, &c);
     gralloc1_buffer_descriptor_t d;
@@ -314,11 +360,13 @@ static int alloc_buffer(int w, int h, int format, int usage, buffer_handle_t *ou
     int r = g1_alloc(g1, 1, &d, &b);
     g1_destroy(g1, d);
     if (r || !b) {
+        klog("grshim: alloc %dx%d fmt %#x usage %#x FAIL %d", w, h, format, usage, r);
         ALOGE("allocation %dx%d format %#x usage %#x refused: %d", w, h, format, usage, r);
         return -ENOMEM;
     }
     uint32_t s = w;
     g1_stride(g1, b, &s);
+    klog("grshim: alloc %dx%d fmt %#x usage %#x ok stride %u", w, h, format, usage, s);
     *stride = s;
     *out = b;
     pthread_mutex_lock(&s_map_lock);
@@ -541,8 +589,10 @@ static int fb_close(struct hw_device_t *d)
 
 static int fb_open(const struct hw_module_t *module, struct hw_device_t **out)
 {
-    if (!ready())
+    if (!ready()) {
+        klog("grshim: fbopen FAIL gralloc1 not ready");
         return -ENODEV;
+    }
     struct fb_ctx *f = calloc(1, sizeof(*f));
     f->fd = open("/dev/graphics/fb0", O_RDWR);
     if (f->fd < 0) {
@@ -595,24 +645,56 @@ static int fb_open(const struct hw_module_t *module, struct hw_device_t **out)
     d->setSwapInterval = fb_swap_interval;
     d->post = fb_post;
     d->enableScreen = fb_enable_screen;
+    klog("grshim: fbopen %ux%u stride %u flips %d sock %d", f->var.xres, f->var.yres, f->stride,
+         f->flips, f->sock);
     ALOGI("fb0 %ux%u, line %u bytes, double buffer %d, BGRA %d, atomic commit %d", f->var.xres,
           f->var.yres, f->stride, f->flips, f->swap_rb, f->commit_ok);
     *out = &d->common;
     return 0;
 }
 
+/* MIUI libui shifts alloc_device_t: [0x40]=alloc (extra passed as 8th arg),
+ * [0x44]=alloc, [0x48]=free, [0x4c]=dump (KK layout: alloc/free/dump). Its
+ * extra==0 alloc call on a KK device lands on free -> -EINVAL ("REAL dequeue
+ * FAILED r=-22"). Any MIUI image sets ro.miui.ui.version.name. */
+static int miui_alloc_layout(void)
+{
+    static int miui = -1;
+    if (miui < 0) {
+        char p[PROPERTY_VALUE_MAX];
+        property_get("ro.miui.ui.version.name", p, "");
+        miui = p[0] != 0;
+    }
+    return miui;
+}
+
+static void gr_dev_dump(alloc_device_t *dev, char *buf, int len)
+{
+    if (buf && len > 0)
+        buf[0] = 0;
+}
+
 static int gr_device_open(const struct hw_module_t *module, const char *name, struct hw_device_t **out)
 {
     if (!strcmp(name, GRALLOC_HARDWARE_GPU0)) {
-        if (!ready())
+        if (!ready()) {
+            klog("grshim: gpu0 open FAIL gralloc1 not ready");
             return -ENODEV;
+        }
         alloc_device_t *d = calloc(1, sizeof(*d));
         d->common.tag = HARDWARE_DEVICE_TAG;
         d->common.version = 0;
         d->common.module = (struct hw_module_t *)module;
         d->common.close = dev_close;
         d->alloc = gr_alloc;
-        d->free = gr_free;
+        if (miui_alloc_layout()) {
+            klog("grshim: gpu0 open miui layout");
+            d->free = (int (*)(alloc_device_t *, buffer_handle_t))gr_alloc;
+            d->dump = (void (*)(alloc_device_t *, char *, int))gr_free;
+            d->reserved_proc[0] = (void *)gr_dev_dump;
+        } else {
+            d->free = gr_free;
+        }
         *out = &d->common;
         return 0;
     }

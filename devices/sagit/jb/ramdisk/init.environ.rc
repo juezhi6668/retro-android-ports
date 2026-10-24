@@ -1,0 +1,16 @@
+# init.environ.rc — Jelly Bean 4.1.2 boot classpath for the mione_plus tree.
+# The KitKat build's copy lists core-libart/framework2/webviewchromium/okhttp/
+# telephony-common/voip-common/mms-common, none of which exist in this ROM;
+# zygote would fail with "ClassNotFound" before system_server ever starts.
+# Only jars that ship in /system/framework belong here. framework_ext.jar is
+# MIUI's own addition to the boot classpath.
+on init
+    export PATH /sbin:/vendor/bin:/system/sbin:/system/bin:/system/xbin
+    export LD_LIBRARY_PATH /vendor/lib:/system/lib
+    export ANDROID_BOOTLOGO 1
+    export ANDROID_ROOT /system
+    export ANDROID_ASSETS /system/app
+    export ANDROID_DATA /data
+    export ASEC_MOUNTPOINT /mnt/asec
+    export LOOP_MOUNTPOINT /mnt/obb
+    export BOOTCLASSPATH /system/framework/core.jar:/system/framework/core-junit.jar:/system/framework/bouncycastle.jar:/system/framework/ext.jar:/system/framework/framework.jar:/system/framework/framework_ext.jar:/system/framework/android.policy.jar:/system/framework/services.jar:/system/framework/apache-xml.jar

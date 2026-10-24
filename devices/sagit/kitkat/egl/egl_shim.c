@@ -22,6 +22,9 @@
 #include <cutils/log.h>
 #include <cutils/properties.h>
 #include <system/window.h>
+#include <fcntl.h>
+#include <stdio.h>
+#include <unistd.h>
 #include "../hyb/hyb.h"
 
 typedef void (*fn_t)(void);
@@ -31,6 +34,35 @@ static EGLSurface (*r_create_window)(EGLDisplay, EGLConfig, EGLNativeWindowType,
 static EGLBoolean (*r_destroy_surface)(EGLDisplay, EGLSurface);
 static EGLImageKHR (*r_create_image)(EGLDisplay, EGLContext, EGLenum, EGLClientBuffer, const EGLint *);
 static buffer_handle_t (*s_import)(buffer_handle_t);
+
+/* direct /dev/kmsg logging: ALOGx output of the shims does not reach dmesg on the MIUI
+ * image (cause unknown, 2026-10-24), so diagnostics bypass liblog entirely */
+static int s_kfd = -1;
+static int s_klog_n = 150;
+static int s_deq_ok;
+
+static void klog(const char *fmt, ...)
+{
+    char b[280];
+    va_list ap;
+    int n;
+    if (s_klog_n <= 0)
+        return;
+    s_klog_n--;
+    if (s_kfd < 0)
+        s_kfd = open("/dev/kmsg", O_WRONLY);
+    if (s_kfd < 0)
+        return;
+    va_start(ap, fmt);
+    n = vsnprintf(b, sizeof(b) - 1, fmt, ap);
+    va_end(ap);
+    if (n > 0) {
+        if (n > (int)sizeof(b) - 2)
+            n = (int)sizeof(b) - 2;
+        b[n++] = '\n';
+        write(s_kfd, b, (size_t)n);
+    }
+}
 
 /* ------------------------------------------------------------------ buffers in A11 format */
 struct a11_buf {
@@ -69,6 +101,10 @@ static struct a11_buf *wrap(ANativeWindowBuffer_t *b)
         return NULL;
     buffer_handle_t q = s_import(b->handle);
     if (!q) {
+        native_handle_t *h = (native_handle_t *)b->handle;
+        klog("eglshim: import refused b=%p h=%p nfds=%d nints=%d i0=%08x i1=%08x", b, h,
+             h ? h->numFds : -1, h ? h->numInts : -1,
+             h ? (unsigned)h->data[h->numFds] : 0, h ? (unsigned)h->data[h->numFds + 1] : 0);
         ALOGE("buffer %p: handle cannot be imported into the QTI gralloc1", b);
         return NULL;
     }
@@ -127,19 +163,36 @@ static void win_dec(struct android_native_base_t *b)
     r->common.decRef(&r->common);
 }
 
-static int w_swap_interval(ANativeWindow *win, int i) { return REAL(win)->setSwapInterval(REAL(win), i); }
+static int w_swap_interval(ANativeWindow *win, int i)
+{
+    klog("eglshim: swapInterval %d", i);
+    return REAL(win)->setSwapInterval(REAL(win), i);
+}
 
 static int w_dequeue(ANativeWindow *win, ANativeWindowBuffer_t **buf, int *fence)
 {
     ANativeWindowBuffer_t *kb = NULL;
     int r = REAL(win)->dequeueBuffer(REAL(win), &kb, fence);
-    if (r)
+    if (r) {
+        int q0 = -1, q1 = -1, q5 = -1, q6 = -1;
+        REAL(win)->query(REAL(win), 0, &q0);
+        REAL(win)->query(REAL(win), 1, &q1);
+        REAL(win)->query(REAL(win), 5, &q5);
+        REAL(win)->query(REAL(win), 6, &q6);
+        klog("eglshim: REAL dequeue FAILED r=%d win=%p deq=%p W=%d H=%d DW=%d DH=%d", r,
+             (void *)REAL(win), (void *)REAL(win)->dequeueBuffer, q0, q1, q5, q6);
         return r;
+    }
     struct a11_buf *w = wrap(kb);
     if (!w) {
+        klog("eglshim: dequeue wrap FAILED kb=%p", (void *)kb);
         REAL(win)->cancelBuffer(REAL(win), kb, *fence);
         *fence = -1;
         return -EINVAL;
+    }
+    if (s_deq_ok < 3) {
+        s_deq_ok++;
+        klog("eglshim: dequeue ok kb=%p %dx%d fmt %d", kb, kb->width, kb->height, kb->format);
     }
     *buf = (ANativeWindowBuffer_t *)w;
     return 0;
@@ -159,9 +212,14 @@ static int w_dequeue_dep(ANativeWindow *win, ANativeWindowBuffer_t **buf)
 {
     ANativeWindowBuffer_t *kb = NULL;
     int r = REAL(win)->dequeueBuffer_DEPRECATED(REAL(win), &kb);
-    if (r)
+    if (r) {
+        klog("eglshim: REAL dequeue_DEPRECATED FAILED r=%d deq=%p", r,
+             (void *)REAL(win)->dequeueBuffer_DEPRECATED);
         return r;
+    }
     *buf = (ANativeWindowBuffer_t *)wrap(kb);
+    if (!*buf)
+        klog("eglshim: dequeue_DEPRECATED wrap FAILED kb=%p", (void *)kb);
     return *buf ? 0 : -EINVAL;
 }
 
@@ -194,8 +252,7 @@ static int w_query(const ANativeWindow *win, int what, int *value)
     }
     if (what <= NATIVE_WINDOW_CONSUMER_USAGE_BITS) {
         int r = REAL(win)->query(REAL(win), what, value);
-        if (s_trace)
-            ALOGI("query %d -> %d (%d)", what, *value, r);
+        klog("eglshim: query %d -> %d (%d)", what, *value, r);
         return r;
     }
     switch (what) {
@@ -226,12 +283,12 @@ static int w_perform(ANativeWindow *win, int op, ...)
     va_list ap;
     va_start(ap, op);
     int ret = 0;
-    if (s_trace) {
+    {
         va_list t;
         va_copy(t, ap);
         int a = va_arg(t, int), b = va_arg(t, int);
         va_end(t);
-        ALOGI("perform %d (%d, %d)", op, a, b);
+        klog("eglshim: perform %d (%d, %d)", op, a, b);
     }
     switch (op) {
     case NATIVE_WINDOW_SET_USAGE:
@@ -321,6 +378,7 @@ static int w_perform(ANativeWindow *win, int op, ...)
         ALOGW("unhandled Android 11 perform %d", op);
         ret = -EINVAL;
     }
+    klog("eglshim: perform %d -> %d", op, ret);
     va_end(ap);
     return ret;
 }
@@ -351,8 +409,10 @@ static struct a11_win *wrap_window(ANativeWindow *real)
 EGLSurface eglCreateWindowSurface(EGLDisplay dpy, EGLConfig cfg, EGLNativeWindowType win, const EGLint *attr)
 {
     struct a11_win *w = wrap_window((ANativeWindow *)win);
+    klog("eglshim: createWindowSurface win=%p real_deq=%p", win, (void *)w->real->dequeueBuffer);
     EGLSurface s = r_create_window(dpy, cfg, (EGLNativeWindowType)&w->w, attr);
     if (s == EGL_NO_SURFACE) {
+        klog("eglshim: createWindowSurface FAILED (driver)");
         free(w);
         return s;
     }
@@ -409,12 +469,28 @@ fn_t eglGetProcAddress(const char *name)
 __attribute__((constructor)) static void shim_init(void)
 {
     char tr[PROPERTY_VALUE_MAX];
+    char cl[96];
+    int cfd = open("/proc/self/cmdline", O_RDONLY);
+    int cn = cfd >= 0 ? (int)read(cfd, cl, sizeof(cl) - 1) : -1;
+    if (cfd >= 0)
+        close(cfd);
+    if (cn >= 0) {
+        cl[cn] = 0;
+        for (int i = 0; i < cn; i++)
+            if (!cl[i])
+                cl[i] = ' ';
+    } else {
+        cl[0] = '?';
+        cl[1] = 0;
+    }
+    klog("eglshim: init begin pid=%d proc=%s", getpid(), cl);
     property_get("debug.egl_shim.trace", tr, "0");
     s_trace = atoi(tr);
     hyb_set_root(HYB_ROOT);
     s_egl = hyb_dlopen("libEGL_adreno.so", 0);
     s_gles2 = hyb_dlopen("libGLESv2_adreno.so", 0);
     if (!s_egl) {
+        klog("eglshim: init FAIL libEGL_adreno (a15): %s", hyb_dlerror());
         ALOGE("Adreno libEGL_adreno (a15): %s", hyb_dlerror());
         return;
     }
@@ -423,6 +499,14 @@ __attribute__((constructor)) static void shim_init(void)
     r_destroy_surface = hyb_dlsym(s_egl, "eglDestroySurface");
     r_create_image = hyb_dlsym(s_egl, "eglCreateImageKHR");
     void *g = dlopen("/system/lib/hw/gralloc.sagit.so", RTLD_NOW);
-    s_import = g ? dlsym(g, "sagit_gralloc_import") : NULL;
+    if (g) {
+        s_import = dlsym(g, "sagit_gralloc_import");
+        if (!s_import)
+            klog("eglshim: dlsym sagit_gralloc_import FAILED: %s", dlerror());
+    } else {
+        klog("eglshim: dlopen gralloc.sagit.so FAILED: %s", dlerror());
+    }
+    klog("eglshim: init done egl=%p gles2=%p gralloc=%p import=%p", s_egl, s_gles2, g,
+         (void *)s_import);
     ALOGI("Adreno 540 driver ready (gralloc import %s)", s_import ? "ok" : "MISSING");
 }

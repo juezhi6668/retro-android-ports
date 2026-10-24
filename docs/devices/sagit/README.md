@@ -22,11 +22,11 @@ yet.
 
 ## Status
 
-### KitKat 4.4.4 — AOSP `android-4.4.4_r2` (KTU84Q) — not built yet
+### KitKat 4.4.4 — AOSP `android-4.4.4_r2` (KTU84Q) — boots
 
 | Area | State |
 | --- | --- |
-| Boot | Not booted. Stock by-name exists at `/dev/block/by-name`, `/dev/block/bootdevice/by-name` and `.../1da4000.ufshc/by-name`; KitKat's ueventd decides the final layout, so both mount stanzas are kept |
+| Boot | Boots (4.4.247 kernel + KitKat system image, verified on the phone 2026-10-24). Stock by-name exists at `/dev/block/by-name`, `/dev/block/bootdevice/by-name` and `.../1da4000.ufshc/by-name`; KitKat's ueventd decides the final layout, so both mount stanzas are kept |
 | Boot image | `TARGET_PREBUILT_KERNEL := vendor/xiaomi/sagit/kernel` (stock `Image.gz-dtb`); run `scripts/patch-sagit-dtb.py` on it first |
 | Display / GPU | libhyb + `fbpresentd` copied from maple; measured panel is JDI r63452 (`1080x1920p-60`, virtual `1080,3840`), density 440; `gralloc.sagit`/EGL shims expect `fb0` |
 | Touch | **`synaptics_dsx`** (`synaptics_dsx.idc`, ABS 0..1079 × 0..1919, `INPUT_PROP_DIRECT`); back/menu/home are touch keys through `Generic.kl`, only volume is in `gpio-keys.kl` |
@@ -39,6 +39,25 @@ yet.
 
 Open work and the Mi-6-vs-maple deltas are tracked in
 [quirks.md](quirks.md).
+
+### MIUI 4.1.2 (`mione_plus`) — images built, not booted
+
+A side port: the Mi-One-Plus MIUI V5 OTA (`4.11.28`, SDK 16, 32-bit)
+repacked as a 1 GiB ext4 `system.img`, plus a `boot.img` assembled from
+this port's 4.4.247 kernel and ramdisk with a Jelly Bean boot classpath
+and device hook. Not booted yet; display HALs are the first blocker.
+Full write-up: [miui-jb.md](miui-jb.md), build script
+`scripts/build-sagit-jb-boot.py`.
+
+### MIUI V7 4.4.4 (`cancro`) — system.img packed, not booted
+
+The Mi 3W MIUI V7 package (`5.12.17`, SDK 19) — the same Android release
+as this port, so the KitKat ramdisk/boot.img are reused unchanged and only
+a repacked 1 GiB ext4 `system.img` is needed
+(`C:\download\sagit\system_miui7.img`, `config/miui7-pack.sh`). The
+ROM's MSM8974 HALs still have to be swapped for this port's 4.4/msm8998
+closure before display/audio work. Full write-up:
+[miui-v7-kitkat.md](miui-v7-kitkat.md).
 
 ## Files you must provide (and where they go)
 
@@ -62,5 +81,7 @@ Minimum to reach a first boot attempt: kernel blob, hybrid root,
 ## Documentation and links
 
 - [quirks.md](quirks.md) — Mi 6 hardware deltas, VERIFY-ME checklist, open blockers
+- [miui-jb.md](miui-jb.md) — the MIUI 4.1.2 side port (system.img + boot.img, open gaps)
+- [miui-v7-kitkat.md](miui-v7-kitkat.md) — the MIUI V7 4.4.4 side port (system.img only, KitKat boot reused)
 - [maple device page](../maple/README.md) — the proven MSM8998/KitKat port this tree derives from
 - [KitKat porting notes](../../advanced/porting-notes/kitkat.md), [libhyb](../../advanced/software/libhyb.md)

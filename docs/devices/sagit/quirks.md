@@ -128,6 +128,136 @@ symlink).
   `QUAT_MI2S_RX Channels` = Two while playing, both back to Off/Powerdown
   after standby.
 
+## Jelly Bean 4.1.2 (MIUI `mione_plus`) boot deltas
+
+The side port in [miui-jb.md](miui-jb.md) reuses the KitKat ramdisk; these
+are the places where a 4.1.2 userland cannot follow a 4.4 ramdisk.
+
+- **A 4.1.2 system needs its own `BOOTCLASSPATH`.** The 4.4 build's
+  `init.environ.rc` lists `core-libart.jar`, `framework2.jar`,
+  `webviewchromium.jar`, `okhttp.jar`, `telephony-common.jar`,
+  `mms-common.jar` — none exist in the MIUI tree, so zygote dies before
+  `system_server`. Overlay `devices/sagit/jb/ramdisk/init.environ.rc`
+  (`core`, `core-junit`, `bouncycastle`, `ext`, `framework`,
+  MIUI's `framework_ext`, `android.policy`, `services`, `apache-xml`).
+  Verify-me: once booted, `dmesg | grep -i class` and
+  `getprop dalvik.vm.stack-trace-file` while zygote runs.
+- **Jelly Bean's `sdcard` daemon takes positional uid/gid.** The ROM's
+  `/system/bin/sdcard` prints `usage: sdcard [-l -f] <path> <uid> <gid>`
+  and hardcodes its FUSE mount point `/storage/sdcard0` (both verified
+  from the binary 2026-10-24). KitKat's
+  `sdcard -u 1023 -g 1023 -l /data/media /mnt/shell/emulated` would print
+  usage and exit, so `init.sagit.rc` uses `sdcard /data/media 1023 1023`.
+- **JB `vold` reads `/system/etc/vold.fstab`, not `/fstab.<hardware>`.**
+  The ROM ships `dev_mount sdcard /storage/sdcard0 auto
+  /devices/platform/msm_sdcc.3/mmc_host` — an MSM8660 SD controller that
+  does not exist here, so that mount simply fails; the ramdisk
+  `fstab.sagit` is inert on 4.1.
+- **The OTA ships only `system/` and `data/`** — no boot, no recovery —
+  so the boot image has to be assembled (`scripts/build-sagit-jb-boot.py`).
+  Its zip entries are FAT (`-rw----`, no symlinks): extracting on Windows
+  loses all 62 links and every exec bit, so unpack on ext4 and apply
+  `config/mione-symlinks.txt` before `mke2fs -d`.
+- **EROFS cannot be used for the repacked system.** The stock
+  `config/system_fs_options` recipe calls `mkfs.erofs`; the 4.4.247 kernel
+  has no EROFS (`/proc/filesystems` on the device lists none), so an EROFS
+  image flashes and never mounts. The re-packed system is ext4.
+- **The MSM8660 firmware in the ROM has to be swapped out.** Its
+  `etc/firmware/*` and `vendor/firmware/fw_bcm*` (yamato/leia/msm_sdcc
+  era) never load here; the image carries the KitKat build's MSM8998
+  closure instead (`a530*/a540*`, `adsp.*`, `cpe_9335/9340.*`, `modem.*`,
+  `mba.mbn`, `wlanmdsp.mbn`, `wlan/qca_cld/`, `acdbdata/Forte/`) —
+  `config/mione-pack.sh` restores those paths from
+  `out/target/product/sagit/system/`. Note this is only what the kernel
+  or a HAL may open by absolute path: the 4.1 `libaudio`/`libacdbloader`
+  themselves are MSM8660 binaries and still will not drive the codec.
+- **No `/dev/log` for the 4.1 userland.** The kernel has no
+  `CONFIG_LOGGER`; the KitKat port patched `liblog` to fall back to
+  `/dev/kmsg`, but this ROM's own `liblog` has no such fallback — expect
+  no `logcat` sink at all, debug from `dmesg` and `/data/misc` snapshots.
+
+## MIUI V7 4.4.4 (`cancro`) pack deltas
+
+The side port in [miui-v7-kitkat.md](miui-v7-kitkat.md) is a plain
+`system.img` repack — being the same release as this port, no ramdisk or
+bootclasspath changes are needed. What the packer has to know:
+
+- **Permissions come from `set_metadata*`, not `set_perm`.** 50 rules in
+  the updater-script (`bin` 0:2000 0755, `netcfg` 02750,
+  `diag_mdlog` 06750, `run-as` 0750 + caps, `su` 06755, `shelld` 0754
+  0:1000, `ppp` 0555 recursive, `vendor/*` 0:2000 0755) are parsed by
+  `config/miui7-pack.sh`; zip entries carry no modes or links.
+- **The OTA's `install-recovery.sh` is removed from the image.** It is
+  0544 — owner-executable — and the ramdisk `init.rc` runs it as
+  `flash_recovery`; left in, it would applypatch the cancro 14 MiB
+  `recovery-from-boot.p` (built against the zip's own `boot.img`) onto
+  sagit's recovery partition.
+- **`run-as` loses its file capabilities** (`mke2fs -d` writes no
+  `security.capability` xattrs); setgid 2000 survives, and adbd is root,
+  so nothing depends on it.
+- **The zip is a full OTA, not a system-only package**: its `boot.img`,
+  `NON-HLOS.bin`, `emmc_appsboot.mbn` and `tz/rpm/sbl1/sdi/DDR` are
+  MSM8974/Mi-3W images and must never be dd'd to a sagit partition.
+- **Every HAL and kernel module is msm8974** (`audio.primary/camera/
+  lights.msm8974`, prima `wlan.ko` for the 3.4 kernel); display is
+  already swapped to this port's libhyb closure (pack section 1c), audio
+  will need the tinyalsa + TFA9888/QUAT_MI2S path from
+  `out/target/product/sagit/system/` (451 `vendor/lib` entries).
+- **The ROM speaks the pre-unified binder ABI.** MIUI cancro userspace
+  was built against QC 3.4-BSP bionic headers: `BINDER_WRITE_READ` =
+  `0xc0186201` (24-byte struct) instead of the unified `0xc0306201`, and
+  the transaction-buffer wire format differs with it. The 4.4.247
+  kernel's binder answers the old ioctl with `-EINVAL`, so `servicemanager`
+  crash-looped and init rebooted to recovery (first flash, 2026-10-24).
+  Only `bin/servicemanager` and `lib/libbinder.so` carry the old constant,
+  so `config/miui7-pack.sh` swaps both for the AOSP 4.4.4 sagit ones —
+  see [miui-v7-kitkat.md](miui-v7-kitkat.md) for the symbol-compat checks.
+- **The display closure is Adreno 330 userspace and must go.** Second
+  flash (2026-10-24) hung at the boot logo: `surfaceflinger` aborted in
+  `SurfaceFlinger::init()` with `__android_log_assert("EGLctx creation
+  failed")` — cancro's `/system/vendor/lib/egl/*` are the msm8974
+  Adreno 330 drivers and cannot drive the Adreno 540; 8 identical
+  tombstones, one every ~5 s, and the `init: untracked pid` dmesg stream
+  was debuggerd's fork writing them. Fix (pack section 1c): cancro's
+  `lib/egl` + `vendor/lib/egl` replaced by the libhyb shims, gralloc shim
+  installed **under the `msm8974` name too** (hw_get_module resolves the
+  variant from `ro.board.platform` before trying `.sagit`),
+  `hwcomposer/copybit/memtrack.msm8974` removed, `/system/a15` hybrid
+  vendor closure added, `fbpresentd` installed.
+- **MIUI liblog has no kmsg fallback, so logcat is invisible.** With no
+  `CONFIG_LOGGER` there is no `/dev/log`, and a process' abort message
+  only reaches logcat — tombstones are the only crash evidence. The pack
+  swaps `lib/liblog.so` for the sagit build's `/dev/kmsg`-fallback liblog
+  (coverage checked: all 509 importers satisfied); after that every
+  ALOGx shows up in dmesg.
+- **MIUI's `alloc_device_t` is shifted one pointer against KitKat.**
+  MIUI libui's `GraphicBufferAllocator::alloc` calls `mAllocDev->[0x40]`
+  (extra 8th argument) or `mAllocDev->[0x44]` (plain) to allocate,
+  `free` calls `[0x48]`, `dump` `[0x4c]` — KitKat puts
+  alloc/free/dump at 0x40/0x44/0x48 (`hw_device_t` = 0x40 bytes, `close`
+  at 0x3c). Against a KitKat-layout gralloc device, MIUI's extra==0
+  alloc call lands on `free`, which returns -EINVAL for the garbage
+  handle: the third-flash logo hang (`eglshim: REAL dequeue FAILED
+  r=-22` every 5.2 s, clean process death, no tombstone, no gralloc
+  klog). The gralloc shim picks the layout at gpu0-open time from
+  `ro.miui.ui.version.name`: on MIUI it installs gr_alloc at 0x40 *and*
+  0x44, gr_free at 0x48, a dump stub at 0x4c. Applies to any MIUI
+  repack, not just cancro.
+- **The liblog→kmsg swap works for the ROM, not for the shims.** After
+  the swap, framework/service ALOG lines reach dmesg (ZygoteInit
+  banners, ServiceManager/AudioSystem waits, memtrack and netd
+  warnings). ALOG calls made from the port's own shims
+  (`libEGL_adreno`, `gralloc.sagit`) still vanish — cause unknown
+  (2026-10-24) — so both shims carry their own direct-`/dev/kmsg`
+  `klog()` (budgets: 40 / 150 lines per process) for diagnostics.
+- **MIUI's bootanimation waits for audio.** With `mediaserver`
+  crash-looping, MIUI's bootanim sits in `AudioSystem` waiting for
+  `media.audio_flinger` (the MIUI anim has sound); audio may have to
+  work before the animation completes.
+- The MSM8998 firmware/acdb closure is added **additively** (the ROM's
+  msm8974 `etc/firmware` stays); MIUI's `data/` preloads are not packed —
+  `/data` is formatted anyway.
+
 ## Known blockers (inherited from maple)
 
 - **WiFi/modem PD stability.** icnss needs SERVREG_LOC (`pdserve`, in-tree)
