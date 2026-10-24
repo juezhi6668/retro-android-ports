@@ -3,7 +3,7 @@
 # builds libhyb's root (/system/a15): walks DT_NEEDED from the Adreno driver and the QTI gralloc1
 # and pulls each library from the sysroot (vendor first, then lineage's system, then the apex
 # libs). the gpu firmware goes in too.
-# usage: stage.py <sysroot from extract-lineage.sh> <out dir>
+# usage: stage.py <sysroot from extract-lineage.sh> <out dir> [--acdb-name=Forte]
 # the out dir gets root/, and is what full_<device>.mk copies to /system/a15.
 # keep it at $AOSP_DIR/vendor/<vendor>/<device>-hyb, sync-device-tree.sh's rsync
 # --delete owns vendor/<vendor>/<device> only.
@@ -106,17 +106,27 @@ if not gralloc:
 copy(gralloc[0], "vendor/lib/hw/gralloc.default.so")
 walk(needed(gralloc[0]))
 
-# the calibration data itself: libacdbloader builds /vendor/etc/acdbdata/<hw_platform>/
-# from /sys/devices/soc0/hw_platform, so the ROM's acdb blocks have to sit under that
-# form-factor name on the device. maple reads "MTP"; a Mi 6 ROM may ship the blocks in
-# MTP/, QRD/, or loose under acdbdata/, so pick whatever the sysroot actually has and
-# stage it as acdbdata/MTP/ (verify the name live: cat /sys/devices/soc0/hw_platform).
+# the calibration data itself: libacdbloader builds /vendor/etc/acdbdata/<name>/
+# and the name comes from the loader, not from the directory the ROM happens to
+# use. maple's loader reads /sys/devices/soc0/hw_platform ("MTP") and the sane
+# staging name is MTP. sagit reads "SAGIT" from that node but the closed
+# libacdbloader hardcodes "Forte" — pass --acdb-name Forte (the strings in the
+# vendor lib are the proof, the sysfs value is a red herring).
 # Staged next to root/ (not inside) because full_<device>.mk copies them to
 # /system/vendor/etc, not into the /system/a15 closure.
+acdb_name = "MTP"
+for a in sys.argv[3:]:
+    if a.startswith("--acdb-name="):
+        acdb_name = a.split("=", 1)[1]
+    else:
+        sys.exit(f"unknown arg: {a}")
+
 acdb_root = os.path.join(sysroot, "vendor/etc/acdbdata")
 acdb_src = None
 if os.path.isdir(acdb_root):
-    if os.path.isdir(os.path.join(acdb_root, "MTP")):
+    if os.path.isdir(os.path.join(acdb_root, acdb_name)):
+        acdb_src = os.path.join(acdb_root, acdb_name)
+    elif os.path.isdir(os.path.join(acdb_root, "MTP")):
         acdb_src = os.path.join(acdb_root, "MTP")
     else:
         dirs = sorted(d for d in glob.glob(acdb_root + "/*") if os.path.isdir(d))
@@ -124,11 +134,17 @@ if os.path.isdir(acdb_root):
             acdb_src = dirs[0]
         elif glob.glob(acdb_root + "/*.acdb"):
             acdb_src = acdb_root
-acdb_dst = os.path.join(hyb, "acdbdata/MTP")
+acdb_dst = os.path.join(hyb, "acdbdata", acdb_name)
 if acdb_src:
     shutil.copytree(acdb_src, acdb_dst, dirs_exist_ok=True)
     print(f"acdbdata ({len(os.listdir(acdb_dst))} files): "
-          f"{os.path.relpath(acdb_src, sysroot)}/ -> acdbdata/MTP/")
+          f"{os.path.relpath(acdb_src, sysroot)}/ -> acdbdata/{acdb_name}/")
+    # adsp_avs_config.acdb sits loose beside the platform dir and is loaded by
+    # the ADSP, not by the platform table; the ROM ships it, so carry it.
+    avs = os.path.join(acdb_root, "adsp_avs_config.acdb")
+    if os.path.isfile(avs):
+        shutil.copyfile(avs, os.path.join(hyb, "acdbdata", "adsp_avs_config.acdb"))
+        print("acdbdata: adsp_avs_config.acdb -> acdbdata/adsp_avs_config.acdb")
 else:
     print(f"no acdb blocks under {os.path.relpath(acdb_root, sysroot)}/ in the sysroot, "
           "audio will run uncalibrated (pick the right subdir by hand)", file=sys.stderr)

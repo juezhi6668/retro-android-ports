@@ -4,11 +4,12 @@
  * capture and a usb-card fallback through the adsp, decimator +20 dB so
  * recording is usable. The Mi 6's card is msm8998-tasha-snd-card
  * (WCD9341); the tavil card names below are a fallback for reference only.
- * Speaker route taken from lineage's
- * mixer_paths_tasha.xml ("speaker" + "deep-buffer-playback" =
- * SLIMBUS_0_RX <- MultiMedia1, pcm 0), mic route from "handset-mic" /
- * "dmic1" (SLIM_0_TX -> MultiMedia1, pcm 0). The adsp resamples capture
- * itself, so every rate opens on pcm 0.
+ * Speaker route from mixer_paths_tasha.xml ("speaker" +
+ * "deep-buffer-playback speaker" = QUAT_MI2S_RX <- MultiMedia1, pcm 0):
+ * the speaker is the TFA9888 on I2S, the codec only serves the headphone
+ * jack. Headphone route is "headphones" (SLIMBUS_0_RX <- MultiMedia1), mic
+ * route from "handset-mic" / "dmic1" (SLIM_0_TX -> MultiMedia1, pcm 0).
+ * The adsp resamples capture itself, so every rate opens on pcm 0.
  *
  * Silent-safe: with no soundcard (card never probes yet — see
  * docs/devices/sagit/quirks.md TEST 36) open succeeds and write discards / read
@@ -180,45 +181,26 @@ static void set_ctl(struct mixer *mixer, const char *name,
         mixer_ctl_set_value(ctl, 0, value);
 }
 
-/* "speaker" path from mixer_paths_tasha.xml plus the deep-buffer
- * playback frontend (SLIMBUS_0_RX <- MultiMedia1). on=1 enables. */
+/* "speaker": the TFA9888 smart amp is fed by I2S on QUAT_MI2S
+ * (msm-dai-q6-mi2s.3 -> tfa98xx-aif-a-34, see
+ * msm_quat_mi2s_tfa98xx_dai_links in msm8998.c). The WCD9335 is not in the
+ * speaker path at all -- driving SLIMBUS_0_RX/RX7/RX8 from the maple-based
+ * route powers the codec but cannot reach the amp. Stock's
+ * "deep-buffer-playback speaker" enables QUAT_MI2S_RX <- MultiMedia1 and
+ * "speaker" only switches the amp profile; the TFA starts in the
+ * container's stand-by profile, so music_dual is what makes it audible.
+ * on=1 enables. */
 static void speaker_path(struct mixer *mixer, int on)
 {
-    static const struct ctl_setting spk[] = {
-        { "COMP7 Switch", NULL, 1 },
-        { "COMP8 Switch", NULL, 1 },
-        { "AIF4_VI Mixer SPKR_VI_1", NULL, 1 },
-        { "AIF4_VI Mixer SPKR_VI_2", NULL, 1 },
-        { "SLIM_4_TX Format", "PACKED_16B", 0 },
-        { "SLIM RX0 MUX", "AIF_MIX1_PB", 0 },
-        { "SLIM RX1 MUX", "AIF_MIX1_PB", 0 },
-        { "SLIM_0_RX Channels", "Two", 0 },
-        { "RX INT7_1 MIX1 INP0", "RX0", 0 },
-        { "RX INT8_1 MIX1 INP0", "RX1", 0 },
-        { "RX7 Digital Volume", NULL, 82 },
-        { "RX8 Digital Volume", NULL, 82 },
-        { "SpkrLeft COMP Switch", NULL, 1 },
-        { "SpkrRight COMP Switch", NULL, 1 },
-        { "SpkrLeft BOOST Switch", NULL, 1 },
-        { "SpkrRight BOOST Switch", NULL, 1 },
-        { "SpkrLeft VISENSE Switch", NULL, 1 },
-        { "SpkrRight VISENSE Switch", NULL, 1 },
-        { "SpkrLeft SWR DAC_Port Switch", NULL, 1 },
-        { "SpkrRight SWR DAC_Port Switch", NULL, 1 },
-        { "VI_FEED_TX Channels", "Two", 0 },
-        { "SLIM0_RX_VI_FB_LCH_MUX", "SLIM4_TX", 0 },
-        { "SLIM0_RX_VI_FB_RCH_MUX", "SLIM4_TX", 0 },
-        /* lineage ships amp gain with speaker protection on; without it
-         * the safe value is lower (CHARQUIRKS speaker: 10 not 18).
-         * RX7/8 above carry the level; keep protection mixers at unity. */
-        { NULL, NULL, 0 },
-    };
-    unsigned i;
-    set_ctl(mixer, "SLIMBUS_0_RX Audio Mixer MultiMedia1", NULL, on);
-    if (!on)
+    if (!on) {
+        set_ctl(mixer, "QUAT_MI2S_RX Audio Mixer MultiMedia1", NULL, 0);
+        set_ctl(mixer, "TFA Profile", "Powerdown", 0);
         return;
-    for (i = 0; spk[i].name; i++)
-        set_ctl(mixer, spk[i].name, spk[i].str, spk[i].value);
+    }
+    /* the XML init section sets this at boot, before anything routes */
+    set_ctl(mixer, "QUAT_MI2S_RX Channels", "Two", 0);
+    set_ctl(mixer, "QUAT_MI2S_RX Audio Mixer MultiMedia1", NULL, 1);
+    set_ctl(mixer, "TFA Profile", "music_dual", 0);
 }
 
 /* "headphones" path from mixer_paths_tasha.xml (same FE as speaker:
@@ -323,6 +305,15 @@ static int ensure_card(struct sagit_audio_device *adev)
         return -ENODEV;
     ALOGI("audio.primary.sagit: late card %u (%s) mixer %p", adev->card,
           adev->card_name, (void *)adev->mixer);
+    /* Stock's mixer_paths_tasha.xml parks the amp in Powerdown from its
+     * init section. The container comes up with a playback profile
+     * already current but the DSP stopped (the first start at probe
+     * fails without the codec clock), and tfa98xx_set_profile() returns
+     * early for the profile that is already selected -- so without this
+     * transition the first "music_dual" in speaker_path() is a no-op and
+     * the amp never starts. The driver records the profile even when the
+     * start fails, so one write here is enough. */
+    set_ctl(adev->mixer, "TFA Profile", "Powerdown", 0);
     return 0;
 }
 

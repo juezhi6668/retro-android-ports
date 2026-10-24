@@ -34,13 +34,19 @@ BOARD_KERNEL_CMDLINE := ehci-hcd.park=3 lpm_levels.sleep_disabled=1 sched_enable
 
 BOARD_BOOTIMAGE_PARTITION_SIZE := 67108864
 BOARD_RECOVERYIMAGE_PARTITION_SIZE := 67108864
-# verify-me: read both sizes on the phone. A system.img larger than the real
-# partition fails `dd` mid-write; the declared size also sizes the ext4 image.
-#   adb shell blockdev --getsize64 /dev/block/bootdevice/by-name/system
-#   adb shell blockdev --getsize64 /dev/block/bootdevice/by-name/cache
+# measured on the phone 2026-10-24 (dumps/sagit-stock-*): boot sde40 64 MiB,
+# recovery sda15 64 MiB, system sda18 9 GiB, cache sda16 256 MiB, persist sda14
+# 64 MiB. The system image is declared at 3 GiB, which fits the 9 GiB partition
+# with room to spare; the declared size is what sizes the ext4 image.
+BOARD_BOOTIMAGE_PARTITION_SIZE := 67108864
+BOARD_RECOVERYIMAGE_PARTITION_SIZE := 67108864
 BOARD_SYSTEMIMAGE_PARTITION_SIZE := 3221225472
 BOARD_CACHEIMAGE_PARTITION_SIZE := 268435456
 BOARD_FLASH_BLOCK_SIZE := 131072
+# androidboot.hardware is NOT appended by the bootloader (the stock boot.img
+# carries it and /proc/cmdline shows one copy), so hardware=sagit selects
+# init.sagit.rc. The bootloader does append mdss_mdp.panel=... for the JDI
+# r63452 panel; nothing to do about that on our side.
 # GPT/ext4 device (not MTD/yaffs2): without this KitKat builds a yaffs2
 # system.img (maple 2026-10-13: mkyaffs2image ran). system.img builds sparse —
 # unsparsify with simg2img before dd.

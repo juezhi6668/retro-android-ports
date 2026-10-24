@@ -565,13 +565,15 @@ TEST 50; the HAL is
   app_type, rate, 0)`. Order matters: cfg → cal → route → `pcm_open`,
   because the afe-cal is applied when the backend port is enabled and the
   asm-cal when the PCM opens.
-- **`hw_platform` selects the acdbdata directory, and the name is not
-  cosmetic.** The loader builds `/vendor/etc/acdbdata/<hw_platform>/`
+- **The acdbdata directory name is whatever the loader resolves, and the
+  name is not cosmetic.** Usually `/vendor/etc/acdbdata/<hw_platform>/`
   (workspace file + top-level `.acdb`) from `/sys/devices/soc0/hw_platform`
   — "MTP" on maple — while upstream trees often ship the files under a
   form-factor or OEM directory (`Sony/` for yoshino). Stage the data under
-  the name the device actually reports, or the loader initializes with no
-  workspace and the calibration is empty.
+  the name the loader resolves, or it initializes with no workspace and the
+  calibration is empty. Do not assume the sysfs value is that name: on
+  sagit the node reads `SAGIT` while the closed `libacdbloader.so` hardcodes
+  `Forte` (grep the `.so` for the directory string before staging).
 - **The node is root-only by default; a group rule is required.** The
   driver creates `/dev/msm_audio_cal` `root:root 0600`, and the loader
   runs inside mediaserver (uid `media`). The EACCES is silent at open()

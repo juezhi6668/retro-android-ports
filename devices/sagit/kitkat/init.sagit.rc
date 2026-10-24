@@ -27,8 +27,9 @@ on init
     mount ext4 /dev/block/platform/soc/by-name/system /system ro wait
 on init
     mount ext4 /dev/block/platform/soc/1da4000.ufshc/by-name/system /system ro wait
-# verify-me fallback: raw GPT node, e.g. `mount ext4 /dev/block/sda46 /system ro wait`.
-# Fill it in from the stock dump only if both by-name paths are absent.
+# Measured 2026-10-24: system=sda18, userdata=sda17, cache=sda16, persist=sda14.
+# The stock ROM exposes the ufshc-level by-name, so the second stanza is the
+# one expected to resolve; the first is the maple-verified KitKat layout.
 
 # qcom subsystem safety: every subsystem defaults to restart_level=SYSTEM, so
 # a dsp crash panics the phone. Set RELATED before anything boots a subsystem

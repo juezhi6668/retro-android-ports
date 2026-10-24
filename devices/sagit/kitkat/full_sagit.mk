@@ -61,9 +61,9 @@ PRODUCT_PACKAGES += \
     audio.primary.sagit \
     libsrec_jni
 
-# Firmware blobs live out-of-git at vendor/xiaomi/sagit-fw/{adsp,wlan,modem,bt}/
-# (pulled from the modem partition + persist; mirrors the kernel-blob and
-# sagit-hyb precedent so sync-device-tree.sh --delete leaves them alone).
+# Firmware blobs live out-of-git at vendor/xiaomi/sagit-fw/{adsp,wlan,modem,audio}/
+# (pulled from the modem partition + persist + stock ROM; mirrors the kernel-blob
+# and sagit-hyb precedent so sync-device-tree.sh --delete leaves them alone).
 # They land where firmware_class.path points (/vendor/firmware, /vendor ->
 # /system/vendor):
 #  - adsp.* + cpe_* (audio DSP + codec engine)
@@ -71,6 +71,9 @@ PRODUCT_PACKAGES += \
 #    MAC falls back per CHARQUIRKS)
 #  - modem/ (mba.mbn, modem.mdt, modem.b00-*, wlanmdsp.mbn — the PIL boot
 #    modem-hold.sh triggers)
+#  - audio/ (tfa98xx_aac.cnt — the TFA98xx speaker-amp container; the codec
+#    loads it while registering the card and the whole card fails (-11) when
+#    it is missing, so /proc/asound/cards stays empty: no sound at all)
 FW_DIR := vendor/xiaomi/sagit-fw
 ifneq ($(wildcard $(FW_DIR)/adsp/adsp.mdt),)
 PRODUCT_COPY_FILES += \
@@ -81,6 +84,10 @@ endif
 ifneq ($(wildcard $(FW_DIR)/modem/modem.mdt),)
 PRODUCT_COPY_FILES += \
     $(foreach f,$(shell cd $(FW_DIR)/modem && ls mba.mbn modem.mdt modem.b* wlanmdsp.mbn 2>/dev/null),$(FW_DIR)/modem/$(f):system/vendor/firmware/$(f))
+endif
+ifneq ($(wildcard $(FW_DIR)/audio/tfa98xx_aac.cnt),)
+PRODUCT_COPY_FILES += \
+    $(foreach f,$(shell cd $(FW_DIR)/audio && ls tfa98xx*.cnt 2>/dev/null),$(FW_DIR)/audio/$(f):system/vendor/firmware/$(f))
 endif
 
 # Graphics: the real Adreno 540 driver (Android 15 vendor closure) and the QTI
@@ -113,13 +120,17 @@ PRODUCT_COPY_FILES += \
     $(foreach f,$(shell cd $(HYB_DIR)/root/vendor/firmware && ls),$(HYB_DIR)/root/vendor/firmware/$(f):system/vendor/firmware/$(f))
 endif
 
-# ACDB calibration: libacdbloader builds its data path from
-# /sys/devices/soc0/hw_platform ("MTP" on qcom MTP boards) — the Mi 6 ROM's
-# calibration is staged under that name. Without it the AFE/ASM cal lookups
-# fail and playback drains silently (maple TEST 50).
-ifneq ($(wildcard $(HYB_DIR)/acdbdata/MTP),)
+# ACDB calibration: the vendor libacdbloader hardcodes "Forte" as its data
+# directory (hw_platform reads SAGIT on this device and is not what the loader
+# uses), so the Mi 6 blocks are staged as acdbdata/Forte and installed under
+# that name. Without it the AFE/ASM cal lookups fail and playback drains
+# silently (maple TEST 50). adsp_avs_config.acdb sits beside the platform dir.
+ifneq ($(wildcard $(HYB_DIR)/acdbdata/Forte),)
 PRODUCT_COPY_FILES += \
-    $(foreach f,$(shell cd $(HYB_DIR)/acdbdata/MTP && ls),$(HYB_DIR)/acdbdata/MTP/$(f):system/vendor/etc/acdbdata/MTP/$(f))
+    $(foreach f,$(shell cd $(HYB_DIR)/acdbdata/Forte && ls),$(HYB_DIR)/acdbdata/Forte/$(f):system/vendor/etc/acdbdata/Forte/$(f))
+endif
+ifneq ($(wildcard $(HYB_DIR)/acdbdata/adsp_avs_config.acdb),)
+PRODUCT_COPY_FILES += $(HYB_DIR)/acdbdata/adsp_avs_config.acdb:system/vendor/etc/acdbdata/adsp_avs_config.acdb
 endif
 
 # fbpresentd: zero-copy MDSS presentation (sources in fbpresentd/). 64-bit, so

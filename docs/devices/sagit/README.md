@@ -13,27 +13,28 @@ targets **KitKat 4.4.4** (AOSP `android-4.4.4_r2`, KTU84Q), a 32-bit
 userspace on the stock 4.4 arm64 kernel via `CONFIG_COMPAT`.
 
 The tree in [`devices/sagit/kitkat/`](../../../devices/sagit/kitkat/) is
-derived from the boot-verified [maple tree](../maple/README.md) and is a
-**skeleton**: every Mi-6-specific fact that needs the phone in hand is
-marked `VERIFY-ME` and must be confirmed from
-`scripts/dump-sagit-stock.sh` before the first flash. Nothing here has
-been built or booted on hardware yet.
+derived from the boot-verified [maple tree](../maple/README.md). The
+Mi-6-specific hardware facts (by-name layout, partition sizes, panel,
+touch, LEDs, ACDB directory, card name, RTC) were **measured on the phone
+on 2026-10-24** with `scripts/dump-sagit-stock.sh --su` and are recorded in
+[quirks.md](quirks.md); nothing here has been built or booted on hardware
+yet.
 
 ## Status
 
-### KitKat 4.4.4 — AOSP `android-4.4.4_r2` (KTU84Q) — skeleton only
+### KitKat 4.4.4 — AOSP `android-4.4.4_r2` (KTU84Q) — not built yet
 
 | Area | State |
 | --- | --- |
-| Boot | Not booted. Mounts are written to try stock (`/dev/block/by-name`) and UFS (`.../1da4000.ufshc/by-name`) paths; confirm from the dump and delete the losing stanzas |
-| Boot image | `TARGET_PREBUILT_KERNEL := vendor/xiaomi/sagit/kernel` (dumped stock `Image.gz-dtb`); run `scripts/patch-sagit-dtb.py` on it first |
-| Display / GPU | libhyb + `fbpresentd` copied from maple; panel timings come from the DTBs, but the panel node names are Xiaomi's — `gralloc.sagit`/EGL shims expect `fb0` |
-| Touch | Synaptics DSX (`synaptics_dsx.idc`, name must equal the input device name from `getevent -p`); back/menu/home are expected as touch keys through `Generic.kl`, only volume keys are in `gpio-keys.kl` |
-| USB | configfs gadget (`init.sagit.usb.rc`), UDC auto-detected by `usbudc.sh` |
-| Audio | tasha (WCD9341) card `msm8998-tasha-snd-card`, tinyalsa HAL + libhyb `libacdbloader`; ACDB blocks staged to `/system/vendor/etc/acdbdata/MTP` (check `hw_platform`) |
+| Boot | Not booted. Stock by-name exists at `/dev/block/by-name`, `/dev/block/bootdevice/by-name` and `.../1da4000.ufshc/by-name`; KitKat's ueventd decides the final layout, so both mount stanzas are kept |
+| Boot image | `TARGET_PREBUILT_KERNEL := vendor/xiaomi/sagit/kernel` (stock `Image.gz-dtb`); run `scripts/patch-sagit-dtb.py` on it first |
+| Display / GPU | libhyb + `fbpresentd` copied from maple; measured panel is JDI r63452 (`1080x1920p-60`, virtual `1080,3840`), density 440; `gralloc.sagit`/EGL shims expect `fb0` |
+| Touch | **`synaptics_dsx`** (`synaptics_dsx.idc`, ABS 0..1079 × 0..1919, `INPUT_PROP_DIRECT`); back/menu/home are touch keys through `Generic.kl`, only volume is in `gpio-keys.kl` |
+| USB | configfs gadget (`init.sagit.usb.rc`), UDC `a800000.dwc3` auto-detected by `usbudc.sh` |
+| Audio | tasha (WCD9341) card `msm8998-tasha-snd-card`, tinyalsa HAL + libhyb `libacdbloader`; ACDB blocks install to `/system/vendor/etc/acdbdata/Forte` (the loader hardcodes `Forte`; `hw_platform` says `SAGIT`). Speaker playback verified 2026-10-24: the loudspeaker is the **TFA9888 on QUAT_MI2S (I2S)**, not the codec — see [quirks.md](quirks.md#audio-speaker-verified-2026-10-24); headphones stay on WCD9335 (`SLIMBUS_0_RX`) |
 | WiFi | qca_cld3/qcwcn plumbing copied from maple; modem PIL firmware from the `modem` partition; the maplemodem PD keepalive problem (see [maple quirks](../maple/quirks.md)) will apply |
 | Storage | internal emulated only (no microSD); no `/vendor` partition on the stock layout — the hybrid root lives at `/system/a15` |
-| Lights | backlight `lcd-backlight` + `wled`, notification `white` LED — node names from the dump |
+| Lights | `lcd-backlight` (no `/sys/class/backlight`) + `wled`, notification `white` LED with `blink` — all measured |
 | Cellular / Camera / GPS / BT / fingerprint | Not started |
 
 Open work and the Mi-6-vs-maple deltas are tracked in
@@ -46,13 +47,13 @@ are gitignored). Paths are relative to the AOSP root (`/home/juezhi/aosp-kitkat`
 
 | What | Where it goes | How |
 | --- | --- | --- |
-| Stock 4.4 kernel blob (`Image.gz-dtb`) | `vendor/xiaomi/sagit/kernel` | `scripts/dump-sagit-stock.sh --root --pull-boot` (or pull `boot` in TWRP and split the gzip/DTB); then `scripts/patch-sagit-dtb.py vendor/xiaomi/sagit/kernel` |
+| Stock 4.4 kernel blob (`Image.gz-dtb`) | `vendor/xiaomi/sagit/kernel` | `scripts/dump-sagit-stock.sh --su --pull-boot` (or pull `boot` in TWRP and split the gzip/DTB); then `scripts/patch-sagit-dtb.py vendor/xiaomi/sagit/kernel` |
 | LineageOS 22.1 (Android 15) `sagit` install zip | keep anywhere, e.g. `~/lineage-22.1-sagit.zip` | download from the LineageOS `sagit` builds; used only as the vendor closure source |
-| Android 15 vendor closure (`/system/a15`) | `vendor/xiaomi/sagit-hyb/root/` + `vendor/xiaomi/sagit-hyb/acdbdata/MTP/` | `tools/libhyb/extract-lineage.sh ~/lineage-22.1-sagit.zip /tmp/sagit-a15` then `tools/libhyb/stage.py /tmp/sagit-a15 vendor/xiaomi/sagit-hyb` |
+| Android 15 vendor closure (`/system/a15`) | `vendor/xiaomi/sagit-hyb/root/` + `vendor/xiaomi/sagit-hyb/acdbdata/Forte/` | `tools/libhyb/extract-lineage.sh ~/lineage-22.1-sagit.zip /tmp/sagit-a15` then `tools/libhyb/stage.py /tmp/sagit-a15 vendor/xiaomi/sagit-hyb --acdb-name=Forte` |
 | 64-bit `fbpresentd` | `vendor/xiaomi/sagit-bin/fbpresentd` | `tools/libhyb/build-native.sh /home/juezhi/aosp-kitkat xiaomi/sagit` (needs the NDK path it expects) |
 | Modem / ADSP / WLAN / BT firmware | `vendor/xiaomi/sagit-fw/{modem,adsp,wlan,bt}/` | copy from the device's `modem`+`bluetooth` partitions, `persist`, and `/vendor/firmware` on a rooted Lineage 22.1 install (the exact file names `init.sagit.rc`/`ueventd.sagit.rc` need are listed there) |
 | `pdserve`/PDR mapping (if the ROM's `pdc` data differs) | `vendor/xiaomi/sagit-fw/` or the in-tree `pdserve` service args | compare `vendor/etc/pd-mappings` from the ROM; maple's mapping is in `devices/maple/kitkat/` |
-| Stock-facts dump | `dumps/sagit-stock-<date>/` | `scripts/dump-sagit-stock.sh --root` — then fix every `VERIFY-ME` from it |
+| Stock-facts dump | `dumps/sagit-stock-<date>/` | `scripts/dump-sagit-stock.sh --su` (`--root` only if adbd allows `adb root`; this ROM is a production build and needs the `su` path) |
 | Optional: stock MiUI / Lineage `system` images | `dumps/` | only for extracting HAL configs (mixer paths, `audio_policy`, acdb layout) |
 
 Minimum to reach a first boot attempt: kernel blob, hybrid root,

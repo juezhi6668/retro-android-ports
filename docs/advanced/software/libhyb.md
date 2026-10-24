@@ -366,7 +366,8 @@ checklist below is what was run, in order:
    hwui ES2 cap if the driver reports ES3) — without the flag KitKat
    builds no `libhwui` at all and every UI frame is software-drawn.
 8. For the audio consumer of the same loader: stage the target's own
-   acdbdata under the directory `/sys/devices/soc0/hw_platform` reports (not
-   the name the vendor tree uses), open `/dev/msm_audio_cal` to the uid that
-   runs mediaserver, and keep the loader handle alive in the HAL — the cal
-   blocks die with its fd.
+   acdbdata under the name the loader resolves — `/sys/devices/soc0/hw_platform`
+   on maple, but check the closed `.so` for a hardcoded name too (sagit
+   reads `SAGIT` and loads `Forte`) — open `/dev/msm_audio_cal` to the uid
+   that runs mediaserver, and keep the loader handle alive in the HAL — the
+   cal blocks die with its fd.

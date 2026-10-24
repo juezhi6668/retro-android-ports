@@ -9,6 +9,9 @@
 #
 #   scripts/dump-sagit-stock.sh              # adb shell as-is
 #   scripts/dump-sagit-stock.sh --root       # adb root first (root-gated nodes)
+#   scripts/dump-sagit-stock.sh --su         # wrap each command in `su -c`
+#                                            # (Magisk/KernelSU ROMs, where
+#                                            # adbd refuses `adb root`)
 #   scripts/dump-sagit-stock.sh --root --pull-boot   # + pull boot partition
 #
 # TWRP works too: its adbd is already root, and by-name lives under
@@ -20,17 +23,23 @@ OUT="$ROOT/dumps/sagit-stock-$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$OUT"
 
 WANT_ROOT=0
+WANT_SU=0
 WANT_BOOT=0
 for a in "$@"; do
     case "$a" in
         --root) WANT_ROOT=1 ;;
+        --su) WANT_SU=1 ;;
         --pull-boot) WANT_BOOT=1 ;;
         *) echo "unknown arg: $a" >&2; exit 2 ;;
     esac
 done
 
 # capture into a file named after the first arg; one remote command string
-grab() { local f="$1"; shift; echo "+ adb shell $*" >&2; adb shell "$@" > "$OUT/$f" 2>/dev/null || true; }
+if [ "$WANT_SU" = 1 ]; then
+    grab() { local f="$1"; shift; echo "+ adb shell su -c $*" >&2; adb shell "su -c $(printf '%q' "$*")" > "$OUT/$f" 2>/dev/null || true; }
+else
+    grab() { local f="$1"; shift; echo "+ adb shell $*" >&2; adb shell "$@" > "$OUT/$f" 2>/dev/null || true; }
+fi
 
 adb start-server
 adb wait-for-device
@@ -102,7 +111,11 @@ if [ "$WANT_BOOT" = 1 ]; then
     done
     if [ -n "$BN" ]; then
         echo "+ pulling boot from $BN/boot" >&2
-        adb shell "dd if=$BN/boot of=/sdcard/sagit-boot.img bs=1048576" >&2 || true
+        if [ "$WANT_SU" = 1 ]; then
+            adb shell "su -c 'dd if=$BN/boot of=/sdcard/sagit-boot.img bs=1048576'" >&2 || true
+        else
+            adb shell "dd if=$BN/boot of=/sdcard/sagit-boot.img bs=1048576" >&2 || true
+        fi
         adb pull /sdcard/sagit-boot.img "$OUT/sagit-boot.img" || true
         adb shell rm -f /sdcard/sagit-boot.img || true
     else

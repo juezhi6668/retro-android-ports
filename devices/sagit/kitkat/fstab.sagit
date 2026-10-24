@@ -2,11 +2,12 @@
 # Block paths: ueventd on the 4.4 kernel creates them under
 # /dev/block/platform/soc/by-name/* (maple-verified for msm8998). KitKat has
 # no /dev/block/bootdevice/ — that symlink is made by newer init.rc.
-# verify-me on THIS phone: `adb shell ls -l /dev/block/platform/soc/*/by-name`
-# (TWRP: ls -l /dev/block/bootdevice/by-name). If the by-name level is missing,
-# use the platform dir it does expose, e.g.
-# /dev/block/platform/soc/1da4000.ufshc/by-name/system — and mirror the same
-# change in init.sagit.rc.
+# Measured on the phone 2026-10-24: the stock Android 16 ROM exposes
+# /dev/block/by-name, /dev/block/bootdevice/by-name AND
+# /dev/block/platform/soc/1da4000.ufshc/by-name (boot=sde40, system=sda18,
+# userdata=sda17, cache=sda16, persist=sda14). KitKat's own ueventd is what
+# decides the final layout; the platform/soc row below is maple-verified and
+# init.sagit.rc's ufshc-level stanza covers the other one.
 /dev/block/platform/soc/by-name/system   /system  ext4  ro                                                              wait
 /dev/block/platform/soc/by-name/userdata /data    ext4  nosuid,nodev,noatime,nodiratime,nobarrier,noauto_da_alloc        wait,check,encryptable=footer
 /dev/block/platform/soc/by-name/cache    /cache   ext4  nosuid,nodev,noatime,nodiratime,nobarrier                        wait,check

@@ -14,7 +14,14 @@ FROM ubuntu:14.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Trusty is EOL: archive.ubuntu.com/security.ubuntu.com and
+# old-releases.ubuntu.com no longer serve 14.04 (404 on dists/trusty).
+# mirrors.aliyun.com still carries trusty main/universe/updates/security/
+# backports; swap the host, keep the /ubuntu/ path. TUNA/USTC had dropped it.
+RUN sed -i -e 's|http://archive.ubuntu.com|http://mirrors.aliyun.com|g' \
+           -e 's|http://security.ubuntu.com|http://mirrors.aliyun.com|g' \
+           /etc/apt/sources.list && \
+    apt-get update && apt-get install -y --no-install-recommends \
     git-core gnupg flex bison gperf build-essential \
     zip curl zlib1g-dev libc6-dev-i386 libncurses5 lib32ncurses5-dev \
     x11proto-core-dev libx11-dev lib32z-dev libgl1-mesa-dev \
@@ -24,9 +31,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean && rm -rf /var/lib/apt/lists/* \
     && ln -sf python2.7 /usr/bin/python
 
-# repo tool (bind-mounted trees expect it on PATH)
-ADD https://storage.googleapis.com/git-repo-downloads/repo /usr/local/bin/repo
-RUN chmod +x /usr/local/bin/repo
+# repo is NOT baked in: fetching it from storage.googleapis.com fails on this
+# network (TLS handshake timeout) and the tree is already synced before the
+# container starts. Mount the host's copy if you need it:
+#   -v /usr/local/bin/repo:/usr/local/bin/repo:ro
 
 # KitKat-era identity + ccache defaults (tune -M to the server's disk)
 ENV USE_CCACHE=1 \

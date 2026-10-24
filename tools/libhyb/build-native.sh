@@ -30,11 +30,12 @@ if [ -z "${NDK:-}" ]; then
     if [ ! -x "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/clang" ]; then
         echo "==> Downloading $NDK_URL"
         mkdir -p "$CACHE"
-        tmp=$(mktemp -d)
-        curl -fL -o "$tmp/ndk.zip" "$NDK_URL"
-        echo "$NDK_SHA1  $tmp/ndk.zip" | sha1sum -c --quiet
-        unzip -q "$tmp/ndk.zip" -d "$CACHE"
-        rm -rf "$tmp"
+        # resume-capable: dl.google.com closes long transfers; a fixed path
+        # (not mktemp) is what lets curl -C - pick up where it stopped
+        curl -fL -C - -o "$CACHE/ndk.zip" "$NDK_URL"
+        echo "$NDK_SHA1  $CACHE/ndk.zip" | sha1sum -c --quiet
+        unzip -q "$CACHE/ndk.zip" -d "$CACHE"
+        rm -f "$CACHE/ndk.zip"
     fi
 fi
 TC=$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin
