@@ -58,7 +58,7 @@ PRODUCT_COPY_FILES += \
 # /etc/media_codecs.xml and AOSP only ships one for goldfish/sdk — without it
 # every compressed format fails with UNKNOWN_ERROR (maple TEST 52).
 PRODUCT_PACKAGES += \
-    audio.primary.sagit \
+    audio.primary.$(PRODUCT_DEVICE) \
     libsrec_jni
 
 # Firmware blobs live out-of-git at vendor/xiaomi/sagit-fw/{adsp,wlan,modem,audio}/
@@ -98,7 +98,7 @@ PRODUCT_PACKAGES += \
     libEGL_adreno \
     libGLESv1_CM_adreno \
     libGLESv2_adreno \
-    gralloc.sagit \
+    gralloc.$(PRODUCT_DEVICE) \
     gralloc.default \
     libGLES_android \
     hybtest \
@@ -106,7 +106,7 @@ PRODUCT_PACKAGES += \
     audiotrack_test \
     audiorecord_test \
     rtc-restore \
-    lights.sagit \
+    lights.$(PRODUCT_DEVICE) \
     pdserve
 
 # Android 15 vendor closure staged by tools/libhyb/stage.py: Adreno 540 driver

@@ -12,8 +12,9 @@ case "${1:-}" in
     maple) VENDOR=sony; DEVICE=maple ;;
     poplar) VENDOR=sony; DEVICE=poplar ;;
     sagit) VENDOR=xiaomi; DEVICE=sagit ;;
+    chiron) VENDOR=xiaomi; DEVICE=chiron ;;
     *)
-        echo "usage: $0 <codename> [version]   (known: cooper, maple, poplar, sagit)"
+        echo "usage: $0 <codename> [version]   (known: cooper, maple, poplar, sagit, chiron)"
         exit 1
         ;;
 esac
@@ -21,8 +22,7 @@ VERSION="${2:-}"
 if [ -z "$VERSION" ]; then
     case "$DEVICE" in
         cooper) VERSION=donut ;;
-        maple|poplar) VERSION=kitkat ;;
-        sagit) VERSION=kitkat ;;
+        maple|poplar|sagit|chiron) VERSION=kitkat ;;
     esac
 fi
 

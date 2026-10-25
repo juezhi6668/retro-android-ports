@@ -1,0 +1,20 @@
+#
+# system.prop for chiron (Xiaomi Mi MIX 2, KitKat) — verify each entry live
+#
+# Display density: 440 is stock Mi MIX 2 (ro.sf.lcd_density=440) on a
+# 1080x2160 5.99" panel. Read it back on stock (getprop ro.sf.lcd_density)
+# before locking — measure, don't guess (cooper 120-vs-160 lesson).
+ro.sf.lcd_density=440
+
+# Wifi interface (WCN3990; wlan0 as on every qca_cld3 device)
+wifi.interface=wlan0
+
+# Model/brand (must match full_chiron.mk)
+ro.product.model=MI MIX 2
+ro.product.brand=Xiaomi
+ro.product.manufacturer=Xiaomi
+ro.product.device=chiron
+
+# GLES: the Adreno 540 driver reports ES 3.2; 0x30002 is what the framework
+# announces to apps (196610).
+ro.opengles.version=196610

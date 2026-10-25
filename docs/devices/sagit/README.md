@@ -13,12 +13,16 @@ targets **KitKat 4.4.4** (AOSP `android-4.4.4_r2`, KTU84Q), a 32-bit
 userspace on the stock 4.4 arm64 kernel via `CONFIG_COMPAT`.
 
 The tree in [`devices/sagit/kitkat/`](../../../devices/sagit/kitkat/) is
-derived from the boot-verified [maple tree](../maple/README.md). The
+derived from the boot-verified [maple tree](../maple/README.md). Its native
+sources (`egl/`, `gralloc/`, `audio/`, `lights/`, `hyb/`, `fbpresentd/`,
+`pdserve/`, `rtc-restore/`) are also compiled for the
+[chiron port](../chiron/README.md): module names and the EGL shim's gralloc
+path follow `TARGET_DEVICE`, so one source builds both phones. The
 Mi-6-specific hardware facts (by-name layout, partition sizes, panel,
 touch, LEDs, ACDB directory, card name, RTC) were **measured on the phone
 on 2026-10-24** with `scripts/dump-sagit-stock.sh --su` and are recorded in
-[quirks.md](quirks.md); nothing here has been built or booted on hardware
-yet.
+[quirks.md](quirks.md); the KitKat image has since booted and been tested
+on the phone (see [Status](#status)).
 
 ## Status
 

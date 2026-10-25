@@ -181,17 +181,32 @@ static void set_ctl(struct mixer *mixer, const char *name,
         mixer_ctl_set_value(ctl, 0, value);
 }
 
-/* "speaker": the TFA9888 smart amp is fed by I2S on QUAT_MI2S
- * (msm-dai-q6-mi2s.3 -> tfa98xx-aif-a-34, see
- * msm_quat_mi2s_tfa98xx_dai_links in msm8998.c). The WCD9335 is not in the
+/* "speaker": the smart amp is fed by I2S on QUAT_MI2S
+ * (msm-dai-q6-mi2s.3). sagit: tfa98xx-aif-a-34, chiron: tas2559 ASI1 (both
+ * selected by the kernel DAI link, msm8998.c). The WCD9335 is not in the
  * speaker path at all -- driving SLIMBUS_0_RX/RX7/RX8 from the maple-based
  * route powers the codec but cannot reach the amp. Stock's
  * "deep-buffer-playback speaker" enables QUAT_MI2S_RX <- MultiMedia1 and
- * "speaker" only switches the amp profile; the TFA starts in the
- * container's stand-by profile, so music_dual is what makes it audible.
- * on=1 enables. */
+ * "speaker" only switches the amp profile. on=1 enables. */
 static void speaker_path(struct mixer *mixer, int on)
 {
+#ifdef AMP_TAS2559
+    if (!on) {
+        set_ctl(mixer, "QUAT_MI2S_RX Audio Mixer MultiMedia1", NULL, 0);
+        set_ctl(mixer, "TAS2559 Mute", "Mute", 0);
+        set_ctl(mixer, "TAS2560 Mute", "Mute", 0);
+        return;
+    }
+    set_ctl(mixer, "QUAT_MI2S_RX Channels", "Two", 0);
+    set_ctl(mixer, "QUAT_MI2S_RX Audio Mixer MultiMedia1", NULL, 1);
+    /* the driver loads tas2559_uCDSP.bin from /vendor/firmware and runs its
+     * own power-up sequence on DAI start; these two are what the QTI HAL
+     * sets on the amp device on top of that */
+    set_ctl(mixer, "TAS2559 DAC Playback Volume", NULL, 15);
+    set_ctl(mixer, "TAS2560 DAC Playback Volume", NULL, 15);
+    set_ctl(mixer, "TAS2559 Mute", "Unmute", 0);
+    set_ctl(mixer, "TAS2560 Mute", "Unmute", 0);
+#else
     if (!on) {
         set_ctl(mixer, "QUAT_MI2S_RX Audio Mixer MultiMedia1", NULL, 0);
         set_ctl(mixer, "TFA Profile", "Powerdown", 0);
@@ -201,14 +216,33 @@ static void speaker_path(struct mixer *mixer, int on)
     set_ctl(mixer, "QUAT_MI2S_RX Channels", "Two", 0);
     set_ctl(mixer, "QUAT_MI2S_RX Audio Mixer MultiMedia1", NULL, 1);
     set_ctl(mixer, "TFA Profile", "music_dual", 0);
+#endif
 }
 
-/* "headphones" path from mixer_paths_tasha.xml (same FE as speaker:
- * SLIMBUS_0_RX <- MultiMedia1). The CLSH_DSM_OUT demux and RX1/RX2
- * volumes come from the vendor path; there is no "headset" path on this
- * codec, headphones is the one wired to the jack. */
+/* "headphones" path from mixer_paths_tasha.xml. sagit goes through
+ * SLIMBUS_0_RX <- MultiMedia1; chiron's file uses the AIF4 playback port
+ * on SLIMBUS_6_RX (SLIM RX2/RX3 <- AIF4_PB). There is no "headset" path
+ * on this codec, headphones is the one wired to the jack. */
 static void headset_path(struct mixer *mixer, int on)
 {
+#ifdef AMP_TAS2559
+    static const struct ctl_setting hp[] = {
+        { "SLIM RX2 MUX", "AIF4_PB", 0 },
+        { "SLIM RX3 MUX", "AIF4_PB", 0 },
+        { "SLIM_6_RX Channels", "Two", 0 },
+        { "RX INT1_2 MUX", "RX2", 0 },
+        { "RX INT2_2 MUX", "RX3", 0 },
+        { "RX INT1 DEM MUX", "CLSH_DSM_OUT", 0 },
+        { "RX INT2 DEM MUX", "CLSH_DSM_OUT", 0 },
+        { NULL, NULL, 0 },
+    };
+    unsigned i;
+    set_ctl(mixer, "SLIMBUS_6_RX Audio Mixer MultiMedia1", NULL, on);
+    if (!on)
+        return;
+    for (i = 0; hp[i].name; i++)
+        set_ctl(mixer, hp[i].name, hp[i].str, hp[i].value);
+#else
     static const struct ctl_setting hp[] = {
         { "SLIM RX0 MUX", "AIF_MIX1_PB", 0 },
         { "SLIM RX1 MUX", "AIF_MIX1_PB", 0 },
@@ -227,11 +261,14 @@ static void headset_path(struct mixer *mixer, int on)
         return;
     for (i = 0; hp[i].name; i++)
         set_ctl(mixer, hp[i].name, hp[i].str, hp[i].value);
+#endif
 }
 
 /* "handset-mic"/"dmic1" from mixer_paths_tasha.xml plus the capture
  * frontend (MultiMedia1 <- SLIM_0_TX). No acdb, so the decimator sits at
- * 84 (0 dB) + 20 for a usable level (CHARQUIRKS mics). */
+ * 84 (0 dB) + 20 for a usable level (CHARQUIRKS mics). sagit's builtin
+ * mic is a DMIC on DEC7; chiron wires AMIC3 to DEC7, and the file also
+ * brings up DEC8/ADC5 in stereo -- TX7 alone is enough for mono. */
 static void mic_path(struct mixer *mixer, int on)
 {
     set_ctl(mixer, "MultiMedia1 Mixer SLIM_0_TX", NULL, on);
@@ -240,8 +277,13 @@ static void mic_path(struct mixer *mixer, int on)
     set_ctl(mixer, "AIF1_CAP Mixer SLIM TX7", NULL, 1);
     set_ctl(mixer, "SLIM_0_TX Channels", "One", 0);
     set_ctl(mixer, "SLIM TX7 MUX", "DEC7", 0);
+#ifdef AMP_TAS2559
+    set_ctl(mixer, "ADC MUX7", "AMIC", 0);
+    set_ctl(mixer, "AMIC MUX7", "ADC3", 0);
+#else
     set_ctl(mixer, "ADC MUX7", "DMIC", 0);
     set_ctl(mixer, "DMIC MUX7", "DMIC0", 0);
+#endif
     set_ctl(mixer, "IIR0 INP0 MUX", "DEC7", 0);
     set_ctl(mixer, "DEC7 Volume", NULL, 104);
 }
@@ -312,8 +354,11 @@ static int ensure_card(struct sagit_audio_device *adev)
      * early for the profile that is already selected -- so without this
      * transition the first "music_dual" in speaker_path() is a no-op and
      * the amp never starts. The driver records the profile even when the
-     * start fails, so one write here is enough. */
+     * start fails, so one write here is enough. chiron's TAS2559 has no
+     * such profile control (the kernel driver runs its own power-up). */
+#ifndef AMP_TAS2559
     set_ctl(adev->mixer, "TFA Profile", "Powerdown", 0);
+#endif
     return 0;
 }
 

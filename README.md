@@ -32,13 +32,15 @@ is the oldest release that can still be synced. The full story — and why a
 | Sony Xperia XZ Premium G8141/G8142 | `maple` | KitKat 4.4.4 (KTU84Q) | Boots to UI; touch, display, USB adb, hardware GL/GLES 3.2 (Adreno 540 in-process via libhyb, 59–60 fps, verified 2026-10-19), brightness/sleep, emulated storage, **playback + capture + headset/headphone routing through the audio HAL** (ACDB calibration from the Android 15 loader, in-process via libhyb; routing driven by AudioPolicyManager's `routing=`; verified 2026-10-19; decoded ogg/mp3 too — TEST 52, a DMIC loopback of a 440 Hz mp3 reads 440.00 Hz; video plays as well: software h264 via Gallery, test pattern rendered full-screen + 880 Hz track looped back). WiFi interface still open: SERVREG_LOC now served in-tree by `pdserve` and the PDR chain (icnss) registers its notifier, but the modem root PD crashes every ~41 s before wlan_pd/WLFW can start (modem stability/keepalive open). [Device page](docs/devices/maple/README.md) |
 | Sony Xperia XZ Premium G8141/G8142 | `maple` | Donut 1.6 (DRD35) | Boots to launcher; touch (stable from ~6.5 s, `vtouch` v1.2.0-maple3), tap-to-unlock keyguard, camera half-press → BACK / full-press → MENU, volume keys, readable key character maps (Settings works), portrait orientation. No audio/WiFi/cellular/camera HAL yet. [Device page](docs/devices/maple/README.md) |
 | Sony Xperia XZ1 G8341/G8342 | `poplar` | KitKat 4.4.4 (KTU84Q) | Boots to UI (launcher + nav bar, touch, display, USB adb, HW GL via glrenderd). Same yoshino/MSM8998 platform as maple; tree predates maple TEST 36-37. [Device page](docs/devices/poplar/README.md) |
-| Xiaomi Mi 6 | `sagit` | KitKat 4.4.4 (KTU84Q) | **Skeleton, not yet built** — device tree derived from maple (same MSM8998/Adreno 540), with Mi-6 deltas: no microSD, Synaptics DSX touch, tasha-only audio, no vendor partition; every hardware fact is a `VERIFY-ME` resolved by `scripts/dump-sagit-stock.sh`. [Device page](docs/devices/sagit/README.md) |
+| Xiaomi Mi 6 | `sagit` | KitKat 4.4.4 (KTU84Q) | Boots to UI (2026-10-24): Adreno 540 GL via libhyb, Synaptics touch, USB adb, emulated storage, speaker playback verified (TFA9888 on QUAT_MI2S) plus headset/mic routing; WiFi plumbing and the rest of cellular/camera open. [Device page](docs/devices/sagit/README.md) |
+| Xiaomi Mi MIX 2 | `chiron` | KitKat 4.4.4 (KTU84Q) | Boots to UI (2026-10-25) on the stock 4.4 kernel: Adreno 540 via libhyb, 1080×2160, TAS2559/TAS2560 speaker + AIF4 headphone routes compiled (playback not yet verified). Shares every native source with the sagit tree; WiFi/cellular/camera open. [Device page](docs/devices/chiron/README.md) |
 
 Each device has a main page (description, per-release status, links) and a
 **quirks** page (everything needed to port to that device — flash layout,
 verified fixes, open gaps): [cooper](docs/devices/cooper/quirks.md),
 [maple](docs/devices/maple/quirks.md), [poplar](docs/devices/poplar/quirks.md),
-[sagit](docs/devices/sagit/quirks.md).
+[sagit](docs/devices/sagit/quirks.md). Chiron's hardware deltas and the
+boot-logo fix currently live on its [device page](docs/devices/chiron/README.md).
 
 Release zips: [GitHub Releases](https://github.com/pukikiko/retro-android-ports/releases)
 (cooper assets are named `full_cooper-*`; maple images are built locally —

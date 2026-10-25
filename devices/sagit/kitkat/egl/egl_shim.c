@@ -27,6 +27,13 @@
 #include <unistd.h>
 #include "../hyb/hyb.h"
 
+/* the board's KitKat gralloc module: hw_get_module_by_class picks gralloc.<ro.hardware>,
+ * so the shim's import must come from the same file the platform loaded (the module
+ * exports sagit_gralloc_import on every board). Set from TARGET_DEVICE in Android.mk. */
+#ifndef GRALLOC_MODULE
+#define GRALLOC_MODULE "/system/lib/hw/gralloc.sagit.so"
+#endif
+
 typedef void (*fn_t)(void);
 static void *s_egl, *s_gles2;
 static fn_t (*r_getproc)(const char *);
@@ -498,13 +505,13 @@ __attribute__((constructor)) static void shim_init(void)
     r_create_window = hyb_dlsym(s_egl, "eglCreateWindowSurface");
     r_destroy_surface = hyb_dlsym(s_egl, "eglDestroySurface");
     r_create_image = hyb_dlsym(s_egl, "eglCreateImageKHR");
-    void *g = dlopen("/system/lib/hw/gralloc.sagit.so", RTLD_NOW);
+    void *g = dlopen(GRALLOC_MODULE, RTLD_NOW);
     if (g) {
         s_import = dlsym(g, "sagit_gralloc_import");
         if (!s_import)
             klog("eglshim: dlsym sagit_gralloc_import FAILED: %s", dlerror());
     } else {
-        klog("eglshim: dlopen gralloc.sagit.so FAILED: %s", dlerror());
+        klog("eglshim: dlopen %s FAILED: %s", GRALLOC_MODULE, dlerror());
     }
     klog("eglshim: init done egl=%p gles2=%p gralloc=%p import=%p", s_egl, s_gles2, g,
          (void *)s_import);
