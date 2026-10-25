@@ -118,6 +118,16 @@ on boot
     # bootloop guard: reboots to TWRP only if the boot never comes alive
     start autowinch
 
+# LightsService writes these from system_server (uid system); the kernel
+# registers every LED class attribute root:root 0644. Own stanza: a missing
+# node aborts the rest of the action.
+on boot
+    chown system system /sys/class/leds/lcd-backlight/brightness
+    chown system system /sys/class/leds/white/trigger
+    chown system system /sys/class/leds/white/brightness
+    chown system system /sys/class/leds/white/blink
+    chown system system /sys/class/leds/wled/brightness
+
 # unattended-bringup guard: stands down when sys.boot_completed=1 or adbd is
 # running; otherwise reboots to recovery after the fuse (default 900 s).
 service autowinch /sbin/autowinch.sh

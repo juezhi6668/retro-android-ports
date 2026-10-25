@@ -1,19 +1,26 @@
-/* lights HAL for Xiaomi Mi 6 (sagit) - KitKat.
+/* lights HAL for Xiaomi msm8998 boards (Mi 6 = sagit, Mi MIX 2 = chiron) - KitKat.
  *
  * Backlight: msm8998 kernels expose the panel backlight as
- * /sys/class/leds/lcd-backlight (what AOSP HALs use). Mi 6 drives it through
- * the PMIC WLED; some Xiaomi kernels also export /sys/class/leds/wled, so the
- * same scaled value is written to both — whichever is wired to the panel
- * takes effect, the other is inert (maple verified the two are independent).
+ * /sys/class/leds/lcd-backlight (what AOSP HALs use). The PMIC WLED is also
+ * exported as /sys/class/leds/wled, so the same scaled value is written to
+ * both — whichever is wired to the panel takes effect, the other is inert
+ * (maple verified the two are independent).
  *
- * Notification: single white LED at /sys/class/leds/white (qpnp). KitKat's
- * LightsService sends notifications + battery through LIGHT_ID_NOTIFICATIONS /
- * LIGHT_ID_BATTERY; both map to the same LED. Blink is used when the caller
- * asks for it; otherwise a steady brightness is written.
- * verify-me: `ls /sys/class/leds` on the phone; rename WHITE_* if the node is
- * named differently.
+ * Notification: both boards wire the PMI8998 RGB red channel, renamed "white"
+ * in the DTS, with qcom,use-blink and an 8-step / 50 ms-ramp LUT — the
+ * breathing pattern. The kernel's `blink` attribute is a 1/0 flag (1 = run the
+ * DT LUT, 0 = back to steady PWM), not an on/off millisecond pair. Brightness
+ * must be written first: qpnp_rgb_set() clears pwm_cfg->blinking, so a
+ * brightness write after `blink 1` cancels the pattern. The channel registers
+ * with the battery-charging trigger, which owns brightness_set, so it is
+ * dropped to "none" before the framework drives the LED.
+ *
+ * The LED class attributes are root:root 0644; init.<board>.rc chowns
+ * white/{brightness,blink,trigger} and the backlight nodes to system.
+ * Without that LightsService (system_server, uid system) gets EACCES and the
+ * notification light never turns on.
  */
-#define LOG_TAG "lights.sagit"
+#define LOG_TAG "lights"
 
 #include <cutils/log.h>
 #include <cutils/properties.h>
@@ -35,6 +42,7 @@ static const char *const WLED_MAX         = "/sys/class/leds/wled/max_brightness
 static const char *const WHITE_BRIGHTNESS = "/sys/class/leds/white/brightness";
 static const char *const WHITE_MAX        = "/sys/class/leds/white/max_brightness";
 static const char *const WHITE_BLINK      = "/sys/class/leds/white/blink";
+static const char *const WHITE_TRIGGER    = "/sys/class/leds/white/trigger";
 
 static int read_int(const char *path)
 {
@@ -57,6 +65,16 @@ static int write_int(const char *path, int value)
     if (fd < 0) return -errno;
     n = snprintf(buf, sizeof(buf), "%d\n", value);
     if (write(fd, buf, n) != n) { close(fd); return -EIO; }
+    close(fd);
+    return 0;
+}
+
+static int write_str(const char *path, const char *value)
+{
+    int fd = open(path, O_WRONLY);
+    int n = strlen(value);
+    if (fd < 0) return -errno;
+    if (write(fd, value, n) != n) { close(fd); return -EIO; }
     close(fd);
     return 0;
 }
@@ -95,23 +113,21 @@ static int set_light_notification(struct light_device_t *dev,
                                   const struct light_state_t *state)
 {
     int v = rgb_to_brightness(state);
+    int blink = v > 0 && (state->flashMode == LIGHT_FLASH_TIMED ||
+                          state->flashMode == LIGHT_FLASH_HARDWARE);
     (void)dev;
+    ALOGI("notification v=%d flash=%d on=%d off=%d", v, state->flashMode,
+          state->flashOnMS, state->flashOffMS);
     pthread_mutex_lock(&g_lock);
+    write_str(WHITE_TRIGGER, "none");
     if (v == 0) {
+        write_int(WHITE_BLINK, 0);
         write_int(WHITE_BRIGHTNESS, 0);
-    } else if (state->flashMode != LIGHT_FLASH_NONE &&
-               (state->flashOnMS > 0 || state->flashOffMS > 0)) {
-        /* qpnp blink takes (on,off) in ms through one node */
-        char buf[32];
-        int fd = open(WHITE_BLINK, O_WRONLY);
-        int n = snprintf(buf, sizeof(buf), "%d %d\n",
-                         state->flashOnMS, state->flashOffMS);
-        if (fd >= 0) {
-            if (write(fd, buf, n) != n) { /* fall through to steady */ }
-            close(fd);
-        }
+    } else if (blink) {
         write_int(WHITE_BRIGHTNESS, scale_to(WHITE_MAX, 255));
+        write_int(WHITE_BLINK, 1);
     } else {
+        write_int(WHITE_BLINK, 0);
         write_int(WHITE_BRIGHTNESS, scale_to(WHITE_MAX, v));
     }
     pthread_mutex_unlock(&g_lock);
