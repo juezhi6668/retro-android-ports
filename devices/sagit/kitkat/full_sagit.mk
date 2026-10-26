@@ -139,3 +139,14 @@ BIN_DIR := vendor/xiaomi/sagit-bin
 ifneq ($(wildcard $(BIN_DIR)/bin/fbpresentd),)
 PRODUCT_COPY_FILES += $(BIN_DIR)/bin/fbpresentd:system/bin/fbpresentd
 endif
+
+# wlq: static WLFW/IRSC helper. On msm8998 legacy ipc-router v1 every
+# user-space QMI sendmsg waits on the global IRSC completion, which only fires
+# when a port configured via IPC_ROUTER_IOCTL_CONFIG_SEC_RULES is closed —
+# without it cnss-daemon's wlfw_bdf_download_req hangs forever and the modem
+# never posts FW_READY. The boot hook (dump-boot-log.sh) runs `wlq irsc
+# /system/vendor/etc/sec_config` once per boot to fire it. Same WCN3990 as
+# chiron, so the same fix applies; details in docs/devices/chiron/wifi-progress.md.
+ifneq ($(wildcard $(BIN_DIR)/bin/wlq),)
+PRODUCT_COPY_FILES += $(BIN_DIR)/bin/wlq:system/bin/wlq
+endif

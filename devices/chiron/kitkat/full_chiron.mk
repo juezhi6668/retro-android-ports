@@ -83,6 +83,43 @@ endif
 ifneq ($(wildcard $(SAGIT_FW)/wlan/bdwlan.bin),)
 PRODUCT_COPY_FILES += \
     $(foreach f,$(shell cd $(SAGIT_FW)/wlan && ls bdwlan* 2>/dev/null),$(SAGIT_FW)/wlan/$(f):system/etc/wifi/$(f))
+
+# The board data alone in /system/etc/wifi is NOT enough for WCN3990. On this
+# platform the WLFW (QMI 0x45) sequence is split across two clients: the
+# kernel icnss driver only does ind_register/msa_info/msa_ready/cap, and the
+# vendor cnss-daemon is the only thing that performs wlfw_bdf_download_req.
+# The modem does not post FW_READY until that BDF lands, so without it icnss
+# never loads the FW and wlan0 never appears. cnss-daemon searches, in
+# /vendor/firmware/ and /vendor/firmware_mnt/image/, for a fixed name list
+# (bdf_c2.bin, bdf_d5.bin, bdf_d5s.bin, bdwlan.bin plus .%03x chip-id and
+# .b%02x board-id variants). chiron is a D5 (chip_id 0x30214), so bdf_d5.bin
+# is the one it wants; the others are installed so any variant probe hits.
+# All sagit blobs are the same generic 19152-byte image, so one source feeds
+# every name. Proven on-device 2026-10-26: with these present cnss-daemon
+# gets past "Failed to Download the BDF File", icnss reaches FW_READY +
+# DRIVER PROBED, and `wpa_supplicant -Dnl80211` scans real 2.4/5 GHz APs.
+define _bdf_variants
+  bdf_c2.bin bdf_d5.bin bdf_d5s.bin bdwlan.bin
+endef
+PRODUCT_COPY_FILES += \
+    $(foreach n,$(_bdf_variants),$(SAGIT_FW)/wlan/bdwlan.bin:system/vendor/firmware/$(n)) \
+    $(foreach n,$(_bdf_variants),$(SAGIT_FW)/wlan/bdwlan.bin:system/vendor/firmware/image/$(n))
+endif
+
+# IRSC completion (the real cold-boot blocker, found 2026-10-26). The BDF files
+# above let cnss-daemon *find* the board data, but on msm8998 legacy ipc-router
+# v1 every user-space CLIENT_PORT send first calls wait_for_irsc_completion(),
+# and that completion is signalled only when an IRSC_PORT closes -- normally done
+# by the vendor irsc_util. Here irsc_util is a 64-bit blob that must be run from
+# a shell with LD_LIBRARY_PATH=/system/lib64:/vendor/lib64 (dstart/init execvp has
+# no env, and a direct `service` exec of it dies silently), so the completion
+# never fired and cnss's wlfw_bdf_download_req stalled forever: no BDF, no
+# FW_READY, no wlan0. wifi-tools/bootlog-wifi-hook.sh fires it at boot with our
+# 32-bit static wlq (`wlq irsc <sec_config>`), which loads sec_config and closes
+# the IRSC port. wlq is built by wifi-tools/build-wlq.sh and staged with the
+# other prebuilts; installed here so it survives a /data wipe.
+ifneq ($(wildcard $(BIN_DIR)/bin/wlq),)
+PRODUCT_COPY_FILES += $(BIN_DIR)/bin/wlq:system/bin/wlq
 endif
 
 # Graphics: the real Adreno 540 driver (Android 15 vendor closure) + QTI

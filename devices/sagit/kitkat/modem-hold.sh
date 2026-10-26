@@ -22,6 +22,22 @@
 #  - missing firmware makes the open fail EAGAIN ("can't open ... Try
 #    again"), NOT ENOENT (TEST 38 quirk) — so retry, don't bail
 
+# RFS readiness gate (chiron WLAN bring-up, 2026-10-26). The modem's RFSA
+# client registers once at boot; if the AP-side RFS/TFTP server (rfssrv2) is
+# not listening yet the modem gets no answer and never retries, so
+# wlanmdsp.mbn is never fetched and WLFW/wlan0 never appear. wf-setup.sh
+# touches the ready file after rfssrv2 announces its ports. Absent the gate
+# file (sagit, or any ramdisk without the WLAN stack) this is a no-op.
+if [ -f /etc/rfs_gate ]; then
+    g=0
+    while [ ! -f /data/local/tmp/rfssrv2.ready ] && [ "$g" -lt 60 ]; do
+        echo "modem-hold: waiting for rfssrv2 ($g)" > /dev/kmsg
+        sleep 1
+        g=$((g + 1))
+    done
+    echo "modem-hold: gate released" > /dev/kmsg
+fi
+
 i=0
 while [ ! -c /dev/subsys_modem ] && [ "$i" -lt 60 ]; do
     dev="$(cat /sys/class/subsys/subsys_modem/dev 2>/dev/null)"

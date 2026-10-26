@@ -1,0 +1,53 @@
+#!/system/bin/sh
+# ---- WLAN bring-up stack (WCN3990 via modem wlan_pd), folded in 2026-10-26 ----
+# EFS daemons (rmt_storage + tftp_server) are the pair the modem ELoader talks
+# to; every SSR kills them, and without a respawn the modem re-crashes in a
+# 41-second loop and never gets a stable life long enough to load
+# wlanmdsp.mbn. Proven on-device 2026-10-26: with both held alive,
+# root_pd_crash froze at 251 and the modem fetched wlanmdsp.mbn (441 blocks).
+# They cannot be init services directly (exit silently under init's exec), so
+# wf-efs-keeper.sh owns them.
+# There used to be a `service wf-irsc /system/vendor/bin/irsc_util ...` here for
+# the ipc-router security rules. It was dead on arrival for the same reason
+# (init's exec of that 64-bit vendor blob exits in ~3 s), which is exactly what
+# left the IRSC completion unsignalled all boot; wf-setup.sh now fires it with
+# the static /sbin/wlq at post-fs-data instead, ~23 s before the old /system
+# boot-log hook could.
+on post-fs-data
+    start wf-setup
+    start wf-efs
+    start wf-wifi-gate
+
+service wf-setup /system/bin/sh /sbin/wf-setup.sh
+    class main
+    user root
+    group root
+    oneshot
+    disabled
+
+service wf-efs /system/bin/sh /sbin/wf-efs-keeper.sh
+    class main
+    user root
+    group root
+    disabled
+    respawn
+
+service wf-sm /data/local/tmp/sm-vndk
+    class main
+    user root
+    group root
+    disabled
+    respawn
+
+# One boot-time recovery pass: unlock the supplicant config when wlan0 shows up
+# and drive a single genuine off->on toggle, which is the only thing the
+# framework accepts after the lost race. oneshot, not respawn: the script exits
+# as soon as the framework reports enabled, and a respawn loop would keep
+# starting a Dalvik `settings`/`dumpsys` client for no reason. From then on the
+# user's own toggles work through the normal path.
+service wf-wifi-gate /system/bin/sh /sbin/wf-wifi-gate.sh
+    class main
+    user root
+    group root
+    disabled
+    oneshot
