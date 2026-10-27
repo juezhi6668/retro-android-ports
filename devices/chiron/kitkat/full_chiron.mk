@@ -41,6 +41,7 @@ PRODUCT_COPY_FILES += \
     vendor/xiaomi/sagit/wf-efs-keeper.sh:root/sbin/wf-efs-keeper.sh \
     vendor/xiaomi/sagit/wf-wifi-gate.sh:root/sbin/wf-wifi-gate.sh \
     vendor/xiaomi/sagit/rfs-dirs.sh:root/sbin/rfs-dirs.sh \
+    vendor/xiaomi/sagit/time-sync.sh:root/sbin/time-sync.sh \
     vendor/xiaomi/sagit/wifi/sec_config:system/vendor/etc/sec_config \
     vendor/xiaomi/sagit/dump-boot-log.sh:system/bin/dump-boot-log.sh \
     vendor/xiaomi/sagit/modem-hold.sh:root/sbin/modem-hold.sh \
@@ -188,6 +189,7 @@ PRODUCT_PACKAGES += \
     audiotrack_test \
     audiorecord_test \
     rtc-restore \
+    time-sync \
     lights.$(PRODUCT_DEVICE) \
     pdserve
 

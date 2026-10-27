@@ -262,9 +262,18 @@ service iprenew_p2p /system/bin/dhcpcd -n
 # Everything is `disabled` and started from the action below, so no part of this
 # depends on class_start ordering.
 on post-fs-data
+    # wifi.interface: the AOSP builds get this from kitkat/system.prop, but a
+    # prebuilt ROM's build.prop does not carry it -- and hardware/libhardware_legacy
+    # wifi.c falls back to its emulator test iface ("sta") when the property is
+    # unset, so wifi_connect_to_supplicant() opens /dev/socket/wpa_sta, fails 5
+    # retries, and WifiMonitor drops wlan0 from its iface map for the whole boot
+    # ("startMonitor called with unknown iface=wlan0"). Set it here so the value
+    # exists before system_server comes up, whichever image this ramdisk lands in.
+    setprop wifi.interface wlan0
     start wf-setup
     start wf-efs
     start wf-wifi-gate
+    start time-sync
 
 service wf-setup /system/bin/sh /sbin/wf-setup.sh
     class main
@@ -278,7 +287,8 @@ service wf-efs /system/bin/sh /sbin/wf-efs-keeper.sh
     user root
     group root
     disabled
-    respawn
+    # (no "respawn" keyword: KitKat init rejects it and restarts any service that
+    # is not "oneshot" on exit, which is what we want for these two.)
 
 # vndbinder context manager: the vendor cnss-daemon's libbinder waits forever
 # for a context manager on /dev/vndbinder. This kernel has vndbinder but KitKat
@@ -290,7 +300,8 @@ service wf-sm /system/bin/sm-vndk
     user root
     group root
     disabled
-    respawn
+    # (no "respawn" keyword: KitKat init rejects it and restarts any service that
+    # is not "oneshot" on exit, which is what we want for these two.)
 
 # One boot-time pass: unlock the supplicant config when the driver shows up,
 # then drive the off->on toggle. oneshot on purpose — the script exits as soon
@@ -302,3 +313,19 @@ service wf-wifi-gate /system/bin/sh /sbin/wf-wifi-gate.sh
     group root
     disabled
     oneshot
+
+# ---- wall clock (rides on the WLAN stack above) ----------------------------------
+# This kernel has no /dev/alarm and the PM8998 RTC has no allow-set-time, so the only
+# writer of the wall clock is root. time-sync.sh waits for a DHCP lease, lets
+# /system/bin/time-sync take the time from the network (SNTP, HTTP Date fallback -- UDP/123
+# is filtered on this network) and settimeofday() it, and stores
+# /data/system/time/rtc_offset, which the rtc-restore service above post-fs-data applies
+# at the next boot. Needed because a prebuilt ROM (MIUI V5) ships stock 4.4 framework JNI,
+# where SystemClock.setCurrentTimeMillis() only works through /dev/alarm and every attempt
+# logs "Unable to open alarm driver"; on the built images the patched framework writes the
+# same offset file, so both flavours restore time the same way.
+service time-sync /system/bin/sh /sbin/time-sync.sh
+    class main
+    user root
+    group root
+    disabled

@@ -180,9 +180,11 @@ are the places where a 4.1.2 userland cannot follow a 4.4 ramdisk.
 
 The V5 pair for this device is `C:\download\chiron\system_miui5_kxdcnb.img` +
 `boot-miui7-ksu2-v5fix.img` (the MIUI 7 sagit boot image, reused because V5 is
-the same SDK). WiFi bring-up on top of it is written up in section 12 of
-[chiron/wifi-progress.md](../chiron/wifi-progress.md);
-the two things that are specific to running a *prebuilt* ROM here:
+the same SDK). WiFi bring-up on top of it is written up in sections 12-13 of
+[chiron/wifi-progress.md](../chiron/wifi-progress.md); the pair that actually works
+is the one at the end of this section, not the two base images named above.
+
+What is specific to running a *prebuilt* ROM here:
 
 - **The ROM's `libhardware_legacy.so` cannot bring WiFi up.** It was compiled
   with `WIFI_DRIVER_MODULE_PATH := /system/lib/modules/wlan.ko`, so
@@ -200,9 +202,131 @@ the two things that are specific to running a *prebuilt* ROM here:
   raw LOS 17.1 blob; `patch-sagit-dtb.py` yields 15774349 B). Neither property it
   removes is WiFi-related, so if the panel shows a stale frame until touched or
   the tasha card never registers, that is the cause, not the WLAN stack.
+- **`wifi.interface` is not in V5's build.prop, and the fallback is fatal.**
+  `hardware/libhardware_legacy/wifi/wifi.c:530` reads it with default
+  `WIFI_TEST_INTERFACE "sta"`, so `wifi_connect_to_supplicant()` opens
+  `/dev/socket/wpa_sta`, times out after 5 retries, `WifiMonitor` reports
+  `startMonitoring(wlan0) failed!` and drops wlan0 from `mIfaceMap` — every later
+  enable then fails with `startMonitor called with unknown iface=wlan0` for the
+  rest of the boot. This port's own AOSP images get the property from
+  `devices/sagit/kitkat/system.prop`, a prebuilt ROM has nowhere to put it, so the
+  ramdisk's WLAN block sets it in `on post-fs-data` (both init rc files, kept
+  identical).
+- **MIUI's WifiNative prefixes every supplicant command with `IFNAME=wlan0 `,
+  which only the *global* control interface parses**
+  (`wpa_supplicant_global_ctrl_iface_process()`,
+  `external/wpa_supplicant_8/wpa_supplicant/ctrl_iface.c:6194`). The per-interface
+  socket in `-O/data/misc/wifi/sockets/` answers `UNKNOWN COMMAND` to all of them,
+  so the HAL has to talk to `/dev/socket/wpa_wlan0` — the socket init creates from
+  the supplicant stanza `socket wpa_wlan0 dgram 660 wifi wifi`, whose fd MIUI's
+  `-g@android:wpa_wlan0` binds as that *filesystem* name (no abstract name ever
+  shows up in `/proc/net/unix`). Leave `-O` alone; that was a workaround that made
+  things worse.
+- **A stub `WCNSS_qcom_cfg.ini` gives you a dead Rx path**, which looks exactly
+  like "the toggle is broken": association and the 4-way handshake complete,
+  `Supplicant state: COMPLETED`, but `/sys/class/net/wlan0/statistics/rx_bytes`
+  never moves, DHCP times out and the framework deauths itself
+  (`reason=3 locally_generated=1`). qca_cld3 takes its Rx mode from the INI
+  (`rx_mode` 1=Rx_thread, 2=RPS, 4=NAPI); the 20-line sagit stub had none of it,
+  while chiron's proven 606-line file sets `rx_mode=4`, `gIPAConfig=0x7d`,
+  `gEnableFlowSteering=1`, `ce_service_max_yield_time=500`, `maxMSDUsPerRxInd=8`.
+  sagit now ships the same file (md5 `771c3e398d0f98da3f5710b66ec9b007`) in
+  `devices/sagit/kitkat/wifi/` and the staged vendor copy.
+- **Wake the screen before judging V5's WiFi.** With the screen off MIUI issues no
+  scan request, `screenstate` switches WiFi off after ~66 s of idle, and the
+  supplicant sits at `INACTIVE` — indistinguishable from a broken HAL.
+- `init` on this base rejects the `respawn` option (`invalid option 'respawn'`); a
+  non-`oneshot` service is restarted on exit anyway, so the two keeper services
+  just omit the keyword.
+- Native `libhardware_legacy`/`WifiHW` ALOGs never reach `/dev/kmsg` here (no
+  logd), while the java framework's do (`<14>`/`<15>` prefixes in `dmesg`). For the
+  HAL, trace to a per-pid file: `/data/misc/wifi/wfdbg.txt-<pid>`, mode 0666.
+- `init.svc.wpa_supplicant` can stay absent — V5 has
+  `/system/etc/permissions/android.hardware.wifi.direct.xml`, so
+  `WifiSettings`/framework calls `startSupplicant(p2p_supported=1)` and the running
+  service is `p2p_supplicant` (wlan0 + p2p0 in one process). Check
+  `init.svc.p2p_supplicant` instead.
+- Flashing this pair: recovery has no `/dev/block/bootdevice/by-name`, so write the
+  raw blocks — boot `/dev/block/sde40` (64 MiB), system `/dev/block/sda18`
+  (9.66 GiB); `/tmp` in recovery is a 2.9 GiB tmpfs.
 - Storage on this V5 image behaves (TWRP sees `/sdcard`), while the AOSP KitKat
   image of the same device does not — still open, see
   [README.md](README.md) storage row.
+- **The wall clock cannot be set by the ROM at all** — it boots at 1971-02-14 and
+  every NTP attempt is silently dropped. Two kernel-side reasons: this image has no
+  android_alarm driver, so there is no `/dev/alarm`, and KitKat's stock
+  `SystemClock.setCurrentTimeMillis()` sets the clock *only* through it (it logs
+  `Unable to open alarm driver: No such file or directory` and returns false); and
+  `qpnp_rtc` in the sagit DT has no `allow-set-time`, so
+  `/sys/class/rtc/rtc0/since_epoch` is a read-only bare second counter (measured
+  35337894). Our AOSP tree works around the first with
+  `patches/kitkat/frameworks-base-time-without-dev-alarm.patch`; a prebuilt ROM can't
+  be patched, so `devices/sagit/kitkat/time-sync/` does the same job from root
+  (`settimeofday()` + write `/data/system/time/rtc_offset`), and `rtc-restore` —
+  which the V5 ramdisk already starts at `on post-fs-data` but which was never
+  shipped as a binary — applies it on the next boot. Details: section 14 of
+  [chiron/wifi-progress.md](../chiron/wifi-progress.md).
+- **`getprop` is exact-match, so `dhcp.wlan0.ip` is always empty** — the lease
+  property is `dhcp.wlan0.ipaddress`. A wait loop keyed on the wrong name never fires.
+- A tool of our own cannot log natively here either (no logd, and ALOG from our own
+  binary doesn't reach kmsg): print to stdout and let `/sbin/time-sync.sh` append it
+  to `/data/local/tmp/time-sync.log`.
+- UDP/123 from the WSL host times out while the same SNTP query from the phone
+  succeeds first try — never conclude "NTP is blocked" from the PC.
+- **The notification LED is dark for two independent reasons.** (1) V5's only lights module is
+  MIUI's `lights.msm8974.so`, which writes `/sys/class/leds/{red,green,blue}/brightness` — this
+  DTS registers none of those. The PMI8998 red channel is the notification LED and comes up as
+  `/sys/class/leds/white` (`max_brightness` 255, measured in recovery). (2) The LED class
+  attributes are created `root:root 0644`, while LightsService runs in system_server (uid
+  system), so every HAL write returns EACCES; MIUI's own `init.rc` only chowns the three
+  colour-named nodes that do not exist. Fix = this port's AOSP `lights.sagit.so`
+  (`devices/sagit/kitkat/lights/lights.c`, repo commit `0ec68b5`) installed under **both**
+  lookup names — `lights.sagit.so` (what `ro.hardware=sagit` resolves first) and
+  `lights.msm8974.so` (the cancro fallback key, i.e. the file V5 actually loads) — plus the
+  `on boot` chown stanza sliced into the V5 ramdisk. That stanza sits *before* the
+  `# ---- WLAN bring-up stack` marker that `repack-v5-boot.sh` appends from, so the repack has
+  to `sed`-slice it out of `init.sagit.rc` separately; it stays its own stanza because a chown
+  onto a missing node aborts the rest of the action.
+- **`/sys/class/leds/white/blink` is a 1/0 flag, not an on/off millisecond pair**, and it is
+  write-only here (`cat` returns I/O error, which is normal — judge blink by the LED or the HAL
+  log). Write `brightness` *before* `blink 1`: `qpnp_rgb_set()` clears `pwm_cfg->blinking`, so a
+  brightness write afterwards cancels the DT breathing LUT. And drop the channel's
+  `battery-charging` trigger to `none` first, otherwise the trigger owns `brightness_set` and
+  swallows the framework's write.
+- **V5 pulses the LED in software instead of asking for `LIGHT_FLASH_HARDWARE`.**
+  `dumpsys notification` lists every record with `led=0x00000000 onMs=0 offMs=0`, and the HAL
+  log alternates `notification v=149` / `v=0` a couple of seconds apart, so on this ROM the
+  steady on/off branch is what runs; the LUT branch stays for hand tests and other ROMs.
+
+Working pair, verified by two consecutive real cold boots with no manual commands
+(2026-10-27): `boot.img` md5 `ee2234588c8b53c5bfe9ec55b6662b97` (ramdisk 341990) +
+`system.img` md5 `2014196202b6bd13258cae04ab73d503` (1 GiB raw ext4), packaged in
+`C:\download\chiron\sagit-v5-wifi-20261027\` and `~/mi5-wifi/out/`. Result:
+`Supplicant state: COMPLETED`, SSID "Xiaomi 15" at 866 Mbps, DHCP
+`10.237.226.237/24`, ping out, and the Settings toggle working in both directions.
+Full write-up: section 13 of
+[chiron/wifi-progress.md](../chiron/wifi-progress.md).
+
+Time sync on top of that pair (2026-10-27, same flashing procedure):
+`boot-mi5-wifi5.img` md5 `c3f314881a7322b436ce0cf596c7e321` + `system_miui5_wifi3.img`
+md5 `585504392664bcfa7f1a6de4df25696a` — at 25 s of uptime, with no network yet,
+`date` already reads the correct 2026 time because `rtc-restore` applied the stored
+offset; once DHCP bound, `/system/bin/time-sync` reported
+`clock set to 2026-10-27 15:08:56 UTC from ntp.aliyun.com, rtc offset 1757773423 saved`.
+`boot-mi5-wifi6.img` md5 `0ef956599e35a985ccc83b8131e3555c` replaces only
+`/sbin/time-sync.sh` (the `dhcp.wlan0.ipaddress` fix plus a 2-minute retry) and is
+awaiting its turn on the phone.
+
+Notification LED on top of the same base (2026-10-28) — this pair supersedes the two above,
+it is the same V5 tree re-packed with WiFi + clock + LED together:
+`boot-mi5-led1.img` md5 `e398455c52f157b8e245d6ba6b29bfe5` (ramdisk 343285) +
+`system_miui5_led.img` md5 `396e31bb43b5baf53d8a966ce0db00e9`, packaged in
+`C:\download\chiron\sagit-v5-led-20261028\`, flashed to the raw blocks and read back
+byte-exact. Verified at 60 s of uptime: the three `white/` attributes are `system system`,
+`dmesg` carries `lights: notification v=149 flash=0 on=0 off=0` from pid 4764 (system_server),
+i.e. our module is the loaded one, `cat /sys/class/leds/white/brightness` returns 149, and
+`echo none > trigger; echo 255 > brightness; echo 1 > blink` arms the breathing pattern.
+Write-up: section 15 of [chiron/wifi-progress.md](../chiron/wifi-progress.md).
 
 ## MIUI V7 4.4.4 (`cancro`) pack deltas
 

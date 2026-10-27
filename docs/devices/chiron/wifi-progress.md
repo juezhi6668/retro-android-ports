@@ -42,6 +42,23 @@
 那边还有一个本 port 完全没有的坑：ROM 自带的 `libhardware_legacy.so` 会去 insmod
 `wlan.ko`，而这套内核的 qca_cld3 是编进去的，所以开关必然打不开，必须换成 AOSP 那份。
 
+第 13 节是 V5 那边最终打通的三条根因（HAL 走错控制口、`wifi.interface` 没设所以 fallback 成
+`sta`、`WCNSS_qcom_cfg.ini` 是 20 行残档导致 Rx 全死），产物是 2026-10-27 那两个镜像
+（boot md5 `ee2234588c8b53c5bfe9ec55b6662b97`、system md5 `2014196202b6bd13258cae04ab73d503`），
+已用两次真实冷启动验证：刷完开机即连接，用户侧开关双向可用。
+
+第 14 节是刷完之后剩下的"时间不对"：内核没有 `/dev/alarm`、PM8998 RTC 又没有
+`allow-set-time`，所以框架拿到 NTP 结果也写不进钟；补救是 root 侧的 `/system/bin/time-sync`
+（SNTP，退路 HTTP `Date:`）自己 `settimeofday()` 并写 `/data/system/time/rtc_offset`，
+再由 ramdisk 里早就存在、但一直没被 shipped 的 `rtc-restore` 在下次开机应用。
+
+第 15 节是同一套做法往**通知呼吸灯**上搬：V5 只带 cancro 的 `lights.msm8974.so`，驱动的是这个
+DTS 不注册的 red/green/blue 节点，而真实节点 `/sys/class/leds/white` 的属性是 `root:root 0644`，
+LightsService（uid system）每笔写都 EACCES —— 两半分别由 `inject-v5-system.sh`（同一份 AOSP
+`lights.sagit.so` 装成两个查找名）和 `repack-v5-boot.sh`（把 chown 段单独切进 V5 ramdisk）固化。
+
+
+
 ## 1. 已固化到镜像的东西（由 `make bootimage` / `make systemimage` 安装）
 
 **唯一来源是设备树**，两个设备共用同一份运行时脚本，放在 `devices/sagit/kitkat/`
@@ -478,10 +495,13 @@ msm8974 的 `pronto_wlan.ko` 更不可能加载 —— 三条路全断，
 
 顺带核对过、不需要动的：V5 的 `wpa_supplicant` 自带 nl80211（318 处字符串），
 DHCP 用镜像里的 `dhcpcd`；`/system/etc/wifi/wpa_supplicant.conf` 写的是
-`ctrl_interface=wlan0`，被 init 服务行的 `-O/data/misc/wifi/sockets` 覆盖，
-socket 仍然是 WifiMonitor 找的 `/data/misc/wifi/sockets/wlan0`。
+`ctrl_interface=wlan0`，被 init 服务行的 `-O/data/misc/wifi/sockets` 覆盖，所以
+**每接口** socket 落在 `/data/misc/wifi/sockets/wlan0` —— 但 framework 走的不是它，
+见 §13 第 1 条（global 控制口 `/dev/socket/wpa_wlan0`）。
 
-**产物（尚未上机冷启动）**：`C:\download\chiron\system_miui5_wifi.img`
+**产物（当时的中间版，最终版见 §13；`boot-mi5-wifi3.img` 与下面那个
+md5 `82a4e600…` 的镜像逐字节相同，就是去掉 `-O` 改写之后的结果）**：
+`C:\download\chiron\system_miui5_wifi.img`
 md5 `e7b5d4e9758d6ccb680e211b4d77c343`（1 GiB raw，e2fsck clean，20% 用量）、
 `C:\download\chiron\boot-miui7-ksu2-v5fix-wifi.img` md5 `82a4e600a294fd7e7d5c436990ea4682`
 （16125952 B，ramdisk 333639 → 341710，33 条目含 4 个 `wf-*` 脚本）。
@@ -489,6 +509,242 @@ sagit 现在 adb 不枚举（Windows 认到 `VID_2717&PID_FF48`，`adb devices` 
 只能 TWRP 刷 + 屏上 dmesg 验。另注：这张 V5 boot 用的还是**没跑过
 `scripts/patch-sagit-dtb.py`** 的内核（15774877 B），两个 DTB 补丁跟 WiFi 无关，
 但 V5 如果出现"静止画面要摸一下才刷新"或声卡不注册，就是这个原因。
+
+## 13. sagit MIUI V5 的 WiFi 真正打通：三条根因（2026-10-27 晚）
+
+现象是"开关打不开 / 能搜到但连不上"。三条根因互相独立、互相掩盖，全部固化进
+`boot.img` + `system.img`，真实冷启动零手工命令即可连接。
+
+**1. HAL 连的是 supplicant 的每接口控制口，而 MIUI 的命令带 `IFNAME=` 前缀。**
+只有 `wpa_supplicant_global_ctrl_iface_process()`（
+`external/wpa_supplicant_8/wpa_supplicant/ctrl_iface.c:6194`，`os_strncmp(buf,"IFNAME=",7)`
+在 :6202）会解析 `IFNAME=<iface> <cmd>`；每接口那份
+`wpa_supplicant_ctrl_iface_process()` 没有这段，一律回 `UNKNOWN COMMAND`。
+把命令改投 global 口之前那份 HAL 探针日志（`C:\tmp\ss-probe.txt`，403 行）里
+supplicant 回了 45 次 `UNKNOWN COMMAND`。
+V5 的 supplicant 由 init 服务行的 `socket wpa_wlan0 dgram 660 wifi wifi` 拿到 fd，
+`-g@android:wpa_wlan0` 在这个版本里绑的是**文件系统**名 `/dev/socket/wpa_wlan0`
+（`/proc/net/unix` 只有这个，abstract 名从未出现），所以把
+`hardware/libhardware_legacy/wifi/wifi.c` 的 `IFACE_DIR` 指到 `/dev/socket` 并按
+`wpa_<iface>` 拼路径，就是 stock 4.4 本来的行为；`-O`（每接口 socket 目录）保持
+MIUI 原样，不用改。
+
+**2. `wifi.interface` 在 V5 上根本没设。** `wifi.c:530` 是
+`property_get("wifi.interface", primary_iface, WIFI_TEST_INTERFACE)`，而
+`WIFI_TEST_INTERFACE` 是 `"sta"`（模拟器默认值）。本 port 的两份 AOSP 镜像靠
+`devices/<dev>/kitkat/system.prop` 提供 `wifi.interface=wlan0`，MIUI V5 的 build.prop
+没有这一条 → `primary_iface=sta` → 打开 `/dev/socket/wpa_sta` → 5 次重试全失败 →
+`WifiMonitor: startMonitoring(wlan0) failed!` → `mIfaceMap.remove(wlan0)` → 此后任何
+enable 只会打 `startMonitor called with unknown iface=wlan0`，正是第 9.2 节那条永久
+wedge。修：ramdisk 的 WLAN 块在 `on post-fs-data` 里 `setprop wifi.interface wlan0`
+（sagit 与 chiron 两份 init rc 同步加，两块 diff 一致）。这条修完，V5 的 framework
+开机自己就连上了 —— 第 9.3 节那套"补一次 off→on"在 V5 上不再需要，gate 只在
+`wifi_on=1` 且框架没连上时才会动作。
+
+**3. `WCNSS_qcom_cfg.ini` 是个 20 行的残档，Rx 路径整个是死的。** 症状精确对应
+"能扫到、能关联、能 4 次握手，但一个数据帧都收不到"：
+`/sys/class/net/wlan0/statistics/rx_bytes` 停在几百字节，`Supplicant state: COMPLETED`
+却拿不到 DHCP，框架超时后自己断开（`reason=3 locally_generated=1`）。qca_cld3 的 Rx
+处理方式由 INI 决定（`rx_mode`：1=Rx_thread、2=RPS、4=NAPI），chiron 跑通那份是
+`rx_mode=4` + `gIPAConfig=0x7d` + `gEnableFlowSteering=1` + `ce_service_max_yield_time=500`
++ `maxMSDUsPerRxInd=8` 一整套，而 sagit 只写了 `gIPAConfig=0`。现在 sagit 的 INI 换成
+chiron 同款（606 行，md5 `771c3e398d0f98da3f5710b66ec9b007`），设备树与 out-of-git 的
+`vendor/xiaomi/sagit/wifi/` 两份同步；AOSP 侧也重跑了一次 `make systemimage`，所以
+`out/target/product/sagit/system` 与 V5 树里那份逐字节相同。
+
+**只在干净镜像上才看得见的三条**：手工 push 那阵子 `/system` 是脏的，
+`wifi.interface` 被临时 `setprop` 掩盖、INI 是旧的、HAL 是 trace 版 —— 任何一条都能
+单独让人误判另外两条。另外 **判断 V5 的 WiFi 之前一定要先点亮屏幕**：屏灭时 MIUI 不发
+扫描请求，`Supplicant state` 停在 INACTIVE，看着就像 HAL 又坏了（本轮我据此误判过一次）。
+
+V5 上取证的两条手段：
+- 原生 `libhardware_legacy`/`WifiHW` 的 ALOG 到不了 kmsg（没有 logd），改用 per-pid
+  文件探针 `/data/misc/wifi/wfdbg.txt-<pid>`（0666，system 与 root 都写得动）。
+  java 侧不同：MIUI V5 的 framework 走 liblog 的 kmsg fallback，`adb shell dmesg`
+  里带 `<15>`/`<14>` 前缀就能看到 `WifiService`/`WifiMonitor`/`WifiStateMachine`。
+- 判定 attach：`startMonitoring(wlan0) with mConnected = false` 之后**没有**
+  `failed!` 就是连上了；`init.svc.wpa_supplicant` 属性可以完全不存在 —— V5 走的是
+  p2p（`hasSystemFeature(FEATURE_WIFI_DIRECT)` → `startSupplicant(1)`），跑的是
+  `p2p_supplicant`，`wlan0` 和 `p2p0` 在同一个进程里。
+
+**最终产物（上机两次冷启动验证，均为刷镜像而非 push 文件）**
+
+| 镜像 | 字节 | md5 |
+| --- | --- | --- |
+| `boot.img`（ramdisk 341990） | 16125952 | `ee2234588c8b53c5bfe9ec55b6662b97` |
+| `system.img`（1 GiB raw ext4，e2fsck clean） | 1073741824 | `2014196202b6bd13258cae04ab73d503` |
+
+打包：Windows `C:\download\chiron\sagit-v5-wifi-20261027\{boot.img,system.img,FLASH.md}`，
+WSL `~/mi5-wifi/out/{boot.img,system.img,MD5SUMS}`。刷的是裸块：
+boot=`/dev/block/sde40`、system=`/dev/block/sda18`（这个 recovery 不建 by-name）。
+冷启动实测：`wifi.interface=wlan0`、`init.svc.p2p_supplicant=running`、51.9s
+`startMonitoring(wlan0)` 一次成功、`Wi-Fi is enabled` + `Supplicant state: COMPLETED` +
+SSID "Xiaomi 15" + 866 Mbps、`wlan0=10.237.226.237/24`（DHCP）、rx 计数器持续上涨、
+`ping 8.8.8.8` 通；`svc wifi disable` → `Wi-Fi is disabled`，`svc wifi enable` →
+重新 COMPLETED 且保持原租约，用户侧开关双向可用。
+
+## 14. 时钟：预构建 ROM 为什么永远同步不上时间（2026-10-27 深夜）
+
+现象：刷好的 V5 里时间停在 1971 年，NTP 同步点了没反应，日期一改就跳回去。
+
+三条根因，前两条在**内核**、第三条在**镜像内容**：
+
+1. **这个内核没有 android_alarm，所以没有 `/dev/alarm`。** KitKat 原版
+   `SystemClock.setCurrentTimeMillis()`（`frameworks/base/core/jni/android_os_SystemClock.cpp`）
+   只认这一条路 —— 打开 `/dev/alarm` 写 alarm struct 再 settimeofday；打不开就直接放弃。
+   所以 system_server 里能看到 `NetworkTimeUpda` 线程在 184 s 真的跑了一轮 NTP，
+   最后那一步写钟却被丢掉，dmesg 里配一句 `Unable to open alarm driver: No such file or directory`。
+   我们自己的 AOSP 树是靠 `patches/kitkat/frameworks-base-time-without-dev-alarm.patch`
+   （ZygoteInit 里补 `CAP_WAKE_ALARM`、SystemClock 直接 settimeofday 并写
+   `/data/system/time/rtc_offset`、AlarmManagerService 换 timerfd/epoll）绕开的，
+   预构建 ROM 没法打这个补丁，只能换一个能写钟的人：**root 侧自己写**。
+2. **PM8998 的 `qpnp_rtc` 在 sagit 的 DT 里没有 `allow-set-time`。** RTC 是只读的，
+   它只是个从上次掉电点继续数的裸秒计数器 —— 实测
+   `/sys/class/rtc/rtc0/since_epoch = 35337894`，也就是 1971-02-14。开机时框架拿到的
+   "现在"就是这个值，写不进 RTC 意味着下一次冷启动还是它。
+3. **V5 镜像里根本没有 `rtc-restore`。** 这个 port 的开机恢复路径（`on post-fs-data` 里
+   `start rtc-restore`，读 `/data/system/time/rtc_offset`）在 ramdisk 里一直在，
+   但那个二进制从来没进过任何预构建 system 分区 —— 属性在、服务定义在、文件不在。
+
+落地的东西（全部在 `devices/sagit/kitkat/`，chiron 共用同一条 init block）：
+
+- `time-sync/time_sync.c` + `Android.mk` → `/system/bin/time-sync`。SNTP 按 RFC 4330 自己拼
+  48 字节包（`pkt[0]=0x1b`，回复取 offset 40 的 transmit timestamp，减 2208988800），
+  依次试 `ntp.aliyun.com`、`cn.pool.ntp.org`、`2.cn.pool.ntp.org`、`time.android.com`、
+  `pool.ntp.org`、`time.windows.com`；全失败退到 HTTP `Date:`（TCP/80，`HEAD /`，
+  自己用 days_from_civil 解析，因为 KitKat bionic 里没有 `timegm`），主机
+  `www.baidu.com`/`www.taobao.com`/`www.qq.com`/`www.apple.com`。成功后 `settimeofday()`，
+  再把 `wall - since_epoch` 写 `/data/system/time/rtc_offset`（目录 0770 root:system，
+  文件先 `.tmp` 再 rename，0660 root:system）—— **路径与格式和 AOSP patch 那份完全一致**，
+  所以 `rtc-restore` 不用改就能复用。
+- `time-sync.sh` → ramdisk `/sbin/time-sync.sh`，只管"什么时候跑"：轮询 DHCP 租约，
+  拿到就跑，成功睡 12 h，失败 2 min 后重试。
+- 两个 init rc 在共享的 `# ---- WLAN bring-up stack` 段里加 `start time-sync`，EOF 加
+  `service time-sync`（class main / user root / group root / disabled）。必须写在这段**之后**：
+  `repack-v5-boot.sh` 只把该段到 EOF 追加进 V5 ramdisk，写在外面的服务到不了预构建 ROM。
+- `inject-v5-system.sh` 顺带把 AOSP 造好的 `rtc-restore` 和 `time-sync` 拷进 V5
+  `/system/bin`（缺一个就 FATAL）；`full_sagit.mk`/`full_chiron.mk` 补
+  `PRODUCT_PACKAGES += time-sync rtc-restore` 和 `root/sbin/time-sync.sh` 的 copy 规则。
+
+V5 上取证的两条坑（跟 WiFi 那轮一样）：
+- **`getprop dhcp.wlan0.ip` 永远是空的。** 这个属性真名是 `dhcp.wlan0.ipaddress`，
+  `getprop` 只做精确匹配、不做前缀匹配，所以脚本写错就永远等不到租约（我第一版就写错了）。
+- **我们的原生二进制 ALOG 到不了 kmsg**（没有 logd），所以 `time-sync` 同时 `printf` 到
+  stdout，由 `time-sync.sh` 把输出重定向进 `/data/local/tmp/time-sync.log`；
+  框架 java 侧不同，`NetworkTimeUpdateService` 那类日志在 `dmesg` 里带 `<14>`/`<15>` 前缀能看到。
+- UDP/123 从 WSL 发不出去（超时），从手机却一次成功 —— 不要把 PC 上的失败当成手机上的失败。
+
+实测（都是刷镜像、不是 push 文件）：
+
+- 手工三种：`/system/bin/time-sync` →
+  `clock set to 2026-10-27 15:08:56 UTC from ntp.aliyun.com, rtc offset 1757773423 saved`，
+  `exit=0`；`--http` 走 `www.baidu.com` 得到**同一个** offset；`--set` 故意把钟打到
+  2020 之后 `rtc-restore` 能按新 offset 拉回（注意：`--set` 自己也会重写 offset，
+  所以"打完再 restore"这种测法是自证的，要测就测 `--set` → 再 sync → offset 回到原值）。
+- 冷启动 25.1 s、网络还没起来时 `date` = `Tue Oct 27 23:01:30 CST 2026`，
+  `init.svc.rtc-restore=stopped`（oneshot 已跑完）、`init.svc.time-sync=running`、
+  `wifi.interface=wlan0` —— 开机恢复这条路是通的。
+- 这一轮冷启动 WiFi 在 238 s 还停在 `Supplicant state: INACTIVE`（屏是亮的），
+  `svc wifi disable` → `enable` 一次才 `COMPLETED`；和 §13 那次"全自动 attach"不一样，
+  说明 V5 的开机自动重连有随机性。time-sync 不依赖它：没租约就一直每分钟重问，
+  网络补上后那一轮自己就跑起来了。
+
+V5 成品：`boot-mi5-wifi5.img`（md5 `c3f314881a7322b436ce0cf596c7e321`，ramdisk 343132）+
+`system_miui5_wifi3.img`（md5 `585504392664bcfa7f1a6de4df25696a`）是取到上面那组数据的那一对；
+`boot-mi5-wifi6.img`（md5 `0ef956599e35a985ccc83b8131e3555c`，ramdisk 343159，sha256
+`278428bfbc06c880439fab65086a814b9220d75d5d74e1d29790d0415031b4d8`）只改 `/sbin/time-sync.sh`
+的 `ipaddress` 与重试逻辑，已刷进 `/dev/block/sde40` 并按字节回读核对（md5 一致），
+但它的**第一次网络同步还没在机上跑完** —— 刷完重启后 Windows 侧 `adb devices` 就再也列不出
+设备（PnP 里 `USB\VID_18D1&PID_4EE7\SAGITKK` 一直是 OK），这一条要等下次连上补。
+打包在 `C:\download\chiron\sagit-v5-time-20261027\{boot.img,system.img,FLASH.md}`，
+WSL 副本在 `~/mi5-wifi/out/`。
+
+AOSP 侧同一轮也重建了（`PRODUCT_PACKAGES` + `root/sbin/time-sync.sh` 那条 copy 规则生效）：
+sagit `boot.img` md5 `416450f4def1dcc1a417e214a7bf823c` / `system.img`
+`9b212ea55b02faade1d934cf6b39e2c4`；chiron `boot.img` `41f052d888abb84df33e43b6a790ff4b` /
+`system.img` `a298c8faf62d882f75c491f3e25d9c89`；两边 `out/target/product/<dev>/system/bin/`
+里 `time-sync` md5 `8f13eeb9fdc4b95443a3bbfdc912d529`、`rtc-restore` md5
+`53904e5aaeab9e6eebb689a9f984044b`，`root/init.<dev>.rc` 各含 4 处 time-sync。这两个还没上机。
+
+**构建侧的一个坑（本轮踩到）**：`scripts/sync-device-tree.sh` 用的是 `rsync -a`，会保留源文件
+mtime。改完 `devices/sagit/kitkat/time-sync.sh` 再 sync 进 `vendor/xiaomi/sagit/`，那个文件的
+mtime 仍是改动时刻，比 `out/.../root/sbin/time-sync.sh` 里上一次拷进去的那份**更旧**，于是 make
+认为目标已是最新、直接跳过 —— sagit 的 boot.img 里就还是旧脚本（1958 B），而没建过的 chiron
+拿到的是新的（1978 B）。判断依据只能是 `stat -c '%s %Y'` 两边的字节数与 md5，不能信"build 成功
+且镜像里确实有这个文件"。修法：`touch vendor/xiaomi/sagit/time-sync.sh` 再
+`rm out/target/product/sagit/root/sbin/time-sync.sh`，然后 `make bootimage`，日志里要能看到
+`Copy: out/.../root/sbin/time-sync.sh` 这一行。
+
+## 15. 呼吸灯：把 chiron 的那套修复搬到 sagit 的 V5 上（2026-10-28）
+
+现象：V5 里来通知、充电闪灯，LED 一直是灭的。chiron 的 V5 早就正常（仓库 commit
+`0ec68b5` "fix notification LED on msm8998 (sagit + chiron)"，当时在 chiron 上实测会呼吸），
+sagit 这边缺的只是"预构建 ROM 也要吃到这两半"。
+
+两条根因，和 §14 一样是**两块都要修**：
+
+1. **V5 自带的 lights 模块驱动的是根本不存在的节点。** 这份 ROM 只带 cancro（Mi 3）那套
+   `lights.msm8974.so`，写 `/sys/class/leds/{red,green,blue}/brightness`。msm8998 上
+   PMI8998 的 RGB **只有红通道**接了通知灯，而且 DTS 把它改名成 `white` —— 真实节点是
+   `/sys/class/leds/white/{brightness,trigger,blink}`（`max_brightness` 255，recovery 里量的），
+   red/green/blue 三个目录这个内核不会建出来。
+2. **LED 的 sysfs 属性是 `root:root 0644`。** LightsService 跑在 system_server 里、uid 是
+   system，所以每一笔写都是 EACCES —— 属主没修之前，HAL 写得再对也不会亮。MIUI 自己的
+   `init.rc` 只 chown red/green/blue（同样是不存在的节点），等于没做。
+
+两半各自落在打包脚本里：
+
+- **system 半边**（`inject-v5-system.sh`）：把 AOSP 造好的 `lights.sagit.so` 同时装成
+  **两个名字** —— `lights.sagit.so`（`ro.hardware=sagit` 先解析到的）和 `lights.msm8974.so`
+  （V5 里本来就在、而且内容是错的那一份）。只加新名字不换旧名字，HAL 管理器仍可能拿到
+  cancro 的。装之前两道 FATAL：文件存在，且 `grep -a 'leds/white/trigger'` 命中（防止装到
+  `0ec68b5` 之前的旧 build）；`verify-v5-wifi.sh` 再断言两个文件 md5 相同。
+  chiron 的 `miui5-chiron-pack.sh` §1g 一直是这个做法（`lights.chiron.so` +
+  `lights.msm8974.so`），sagit 只是把同一对写死成自己的两个名字。
+- **boot 半边**（`repack-v5-boot.sh`）：chown 那一段在 `init.sagit.rc` 里位于
+  `# ---- WLAN bring-up stack` 标记**之前**，而该脚本只把标记到 EOF 追加进 V5 ramdisk，
+  所以必须单独切：`sed -n '/^# LightsService writes these/,/leds\/wled\/brightness/p'`。
+  幂等（V5 rc 里已经有 `leds/white/trigger` 就跳过），切不出来就 FATAL 让打包失败。
+  五条 chown：`lcd-backlight/brightness`、`white/trigger`、`white/brightness`、`white/blink`、
+  `wled/brightness`。**它们必须自己占一个 `on boot` 段** —— init 里一条 chown 打到缺失节点会
+  中断该 action 剩下的全部语句。
+
+HAL 里那条最容易写反的次序（`0ec68b5` 的实质内容，AOSP 和 V5 共用一个 `lights.c`）：
+
+- `blink` **不是**"亮 ms / 灭 ms"，qpnp 驱动把它当 1/0 开关：1 = 跑 DTS 里
+  `qcom,use-blink` 那条 8 步 / 50 ms 斜坡 LUT（呼吸），0 = 回到普通 PWM 常亮。
+- **brightness 必须在 blink 之前写**：`qpnp_rgb_set()` 会清掉 `pwm_cfg->blinking`，
+  先 `blink 1` 再写 brightness 等于亲手把图案取消。
+- 写之前先把 `trigger` 置 `none`：这个通道注册在 `battery-charging` trigger 上，
+  trigger 占着 `brightness_set`，框架的写会被吞。
+
+KitKat 框架侧（`frameworks/base/services/java/com/android/server/LightsService.java`）：
+`LIGHT_ID_NOTIFICATIONS = 4`，`flashMode` 0/1/2 = NONE/TIMED/HARDWARE。
+**V5 不走硬件呼吸** —— 它是软件计时：同一条通知每隔两三秒把 `v` 在 149 和 0 之间调一次
+（实测 157.9 / 159.1 / 162.1 / 163.4 s），所以真正跑的是 HAL 里"常亮 / 常灭"那一支；
+`dumpsys notification` 里每条记录都是 `led=0x00000000 onMs=0 offMs=0`，也就是这个 ROM 上
+没有 app 提供 LED 参数。LUT 那一支留着是为了手测和需要 HARDWARE 闪烁的 ROM。
+
+实测（刷下面那对镜像，不是 push 文件）：
+
+- 属主改过来了：`ls -l /sys/class/leds/white/{brightness,trigger,blink}` → 三个都是
+  `system system`（`blink` 是 `0660`，另外两个 `0644`）。
+- 载入的确实是我们的模块：`dmesg` 里 `<14>[51.783203] SystemServer: Lights Service` 之后紧跟
+  `<14>[51.803574] lights: notification v=149 flash=0 on=0 off=0`，pid 4764 = system_server；
+  再往后 `v=0` 与 `v=149` 交替出现，就是 MIUI 的软件脉冲。
+- 写落到硬件：`cat /sys/class/leds/white/brightness` = `149`。
+- 呼吸图案能起来（手测）：`echo none > trigger; echo 255 > brightness; echo 1 > blink` → 按 LUT
+  呼吸；`echo 0 > blink; echo 0 > brightness` → 停。
+- **`cat /sys/class/leds/white/blink` 返回 I/O error 是正常的** —— 这个属性在该驱动里只写不读，
+  别当成失败；判断 blink 只能看灯或看 HAL 日志。
+
+成品（**取代** §13、§14 的两对，同一个 system 树重打，WiFi + 时钟 + 呼吸灯全在里面）：
+`boot-mi5-led1.img` md5 `e398455c52f157b8e245d6ba6b29bfe5`（ramdisk 343285，sha256
+`a9557f35e8f638e9ed76abd882546f8a2867a0ec9752750d73ec0fc31502ebc9`）+ `system_miui5_led.img`
+md5 `396e31bb43b5baf53d8a966ce0db00e9`（sha256 `2b0338e574f4bf07f5221502c6dcb28e004cae2d9fa45ea8a6833d5f19fc3c7d`），
+两个都已刷进本机并按字节回读核对；打包在
+`C:\download\chiron\sagit-v5-led-20261028\{boot.img,system.img,FLASH.md}`，WSL 副本 `~/mi5-wifi/out/`。
+sagit 的 V5 至此有：WiFi、墙钟、通知灯（震动/导航栏那两条是 chiron pack 的事，sagit 这边不涉及）。
 
 ## 4. 红线（用户规矩，必须遵守）
 
