@@ -60,6 +60,7 @@ cd aosp-kitkat
 ( cd frameworks/base    && git apply ../../patches/kitkat/frameworks-base-keyguard-scrim-no-input.patch )
 ( cd frameworks/base    && git apply ../../patches/kitkat/frameworks-base-systemui-wallpaper-canvas-fallback.patch )
 ( cd hardware/libhardware && git apply ../../patches/kitkat/hardware-libhardware-gralloc-fb-stride.patch )
+( cd hardware/libhardware_legacy && git apply ../../patches/kitkat/hardware-libhardware-legacy-wifi-socket.patch )
 ( cd packages/apps/Settings && git apply ../../patches/kitkat/packages-apps-settings-kernel-version.patch )
 
 # device tree -> $AOSP_DIR/vendor/sony/maple

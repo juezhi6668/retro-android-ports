@@ -1,0 +1,59 @@
+diff --git a/wifi/Android.mk b/wifi/Android.mk
+index cde99d7..ff794ed 100644
+--- a/wifi/Android.mk
++++ b/wifi/Android.mk
+@@ -25,6 +25,6 @@ ifdef WIFI_DRIVER_FW_PATH_PARAM
+ LOCAL_CFLAGS += -DWIFI_DRIVER_FW_PATH_PARAM=\"$(WIFI_DRIVER_FW_PATH_PARAM)\"
+ endif
+ 
+-LOCAL_SRC_FILES += wifi/wifi.c
++LOCAL_SRC_FILES += wifi/wifi.c wifi/softap_qc_stub.c
+ 
+ LOCAL_SHARED_LIBRARIES += libnetutils
+diff --git a/wifi/softap_qc_stub.c b/wifi/softap_qc_stub.c
+new file mode 100644
+index 0000000..7349447
+--- /dev/null
++++ b/wifi/softap_qc_stub.c
+@@ -0,0 +1,10 @@
++/*
++ * Stub for the CodeAurora symbol MIUI/QC libandroid_runtime imports from
++ * libhardware_legacy. softapd is not part of this tree, so SoftAP via
++ * softapd is unsupported; callers see -1.
++ */
++int wifi_connect_to_softapd(const char *iface, const char *ssid,
++                            const char *key, int channel, int auth)
++{
++    return -1;
++}
+diff --git a/wifi/wifi.c b/wifi/wifi.c
+index ff9357b..853f240 100644
+--- a/wifi/wifi.c
++++ b/wifi/wifi.c
+@@ -80,7 +80,7 @@ static char primary_iface[PROPERTY_VALUE_MAX];
+ 
+ #define WIFI_DRIVER_LOADER_DELAY	1000000
+ 
+-static const char IFACE_DIR[]           = "/data/system/wpa_supplicant";
++static const char IFACE_DIR[]           = "/dev/socket";
+ #ifdef WIFI_DRIVER_MODULE_PATH
+ static const char DRIVER_MODULE_NAME[]  = WIFI_DRIVER_MODULE_NAME;
+ static const char DRIVER_MODULE_TAG[]   = WIFI_DRIVER_MODULE_NAME " ";
+@@ -635,10 +635,13 @@ int wifi_connect_to_supplicant()
+ {
+     static char path[PATH_MAX];
+ 
+-    if (access(IFACE_DIR, F_OK) == 0) {
+-        snprintf(path, sizeof(path), "%s/%s", IFACE_DIR, primary_iface);
+-    } else {
+-        snprintf(path, sizeof(path), "@android:wpa_%s", primary_iface);
++    snprintf(path, sizeof(path), "%s/wpa_%s", IFACE_DIR, primary_iface);
++    if (access(path, F_OK) != 0) {
++        if (access(IFACE_DIR, F_OK) == 0) {
++            snprintf(path, sizeof(path), "%s/%s", IFACE_DIR, primary_iface);
++        } else {
++            snprintf(path, sizeof(path), "@android:wpa_%s", primary_iface);
++        }
+     }
+     return wifi_connect_on_socket_path(path);
+ }
