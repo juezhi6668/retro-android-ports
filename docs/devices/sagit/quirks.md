@@ -176,6 +176,34 @@ are the places where a 4.1.2 userland cannot follow a 4.4 ramdisk.
   `/dev/kmsg`, but this ROM's own `liblog` has no such fallback — expect
   no `logcat` sink at all, debug from `dmesg` and `/data/misc` snapshots.
 
+## MIUI V5 4.4.2 (`cancro`) pack deltas
+
+The V5 pair for this device is `C:\download\chiron\system_miui5_kxdcnb.img` +
+`boot-miui7-ksu2-v5fix.img` (the MIUI 7 sagit boot image, reused because V5 is
+the same SDK). WiFi bring-up on top of it is written up in section 12 of
+[chiron/wifi-progress.md](../chiron/wifi-progress.md);
+the two things that are specific to running a *prebuilt* ROM here:
+
+- **The ROM's `libhardware_legacy.so` cannot bring WiFi up.** It was compiled
+  with `WIFI_DRIVER_MODULE_PATH := /system/lib/modules/wlan.ko`, so
+  `wifi_load_driver()` asks for `wlan.driver.status=ok` plus a `wlan` line in
+  `/proc/modules`, and when both fail it `insmod`s the msm8974 prima module.
+  qca_cld3 is *built into* the 4.4.247 image (its `wlan_hdd_*` symbols are in the
+  `Image`, so there is no `/proc/modules` entry to find) and the prima `.ko` can
+  never load, so the function returns -1 and the toggle refuses to turn on.
+  Replace the library with this port's AOSP build
+  (`out/target/product/sagit/system/lib/libhardware_legacy.so`, no insmod path) —
+  the same swap `miui5-chiron-pack.sh` does, which also moves vibration off the
+  Mi 3 Immersion engine. Nothing in V5's `/system/lib`, `lib/hw`, `bin` or `xbin`
+  imports any of the 111 V5-only exports, so the swap is link-safe.
+- **The V5 boot image still has the unpatched DTBs** (kernel 15774877 B, i.e. the
+  raw LOS 17.1 blob; `patch-sagit-dtb.py` yields 15774349 B). Neither property it
+  removes is WiFi-related, so if the panel shows a stale frame until touched or
+  the tasha card never registers, that is the cause, not the WLAN stack.
+- Storage on this V5 image behaves (TWRP sees `/sdcard`), while the AOSP KitKat
+  image of the same device does not — still open, see
+  [README.md](README.md) storage row.
+
 ## MIUI V7 4.4.4 (`cancro`) pack deltas
 
 The side port in [miui-v7-kitkat.md](miui-v7-kitkat.md) is a plain

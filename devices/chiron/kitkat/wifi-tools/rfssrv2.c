@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
@@ -17,7 +18,14 @@
  * real storage — discarding writes stalled the modem's config engine. */
 
 #define NINST 12
-#define RFS_ROOT "/system/vendor/rfs/msm/mpss"
+/* The writable half of the RFS tree cannot live under /vendor: on this port
+ * /vendor is /system/vendor and /system is mounted read-only, so the modem's
+ * WRQs (mcfg.tmp round-trip) and the readwrite/shared/hlos links could never be
+ * created on a freshly flashed image. Default to /data (wf-setup.sh runs after
+ * post-fs-data, so /data is already mounted) and let argv[1] override it;
+ * rfs-dirs.sh builds the matching tree. */
+static char rfs_root[256] = "/data/rfs/msm/mpss";
+#define RFS_ROOT rfs_root
 #define FW_DIR   "/system/vendor/firmware/image"
 #define MDM_DIR  "/data/local/tmp/mdm2/image"
 static int fds[NINST];
@@ -156,7 +164,8 @@ static void serve_rrq(int fd, struct sockaddr_msm_ipc* from, const char* fn, con
     fflush(stdout);
 }
 
-int main(void) {
+int main(int argc, char** argv) {
+    if (argc > 1) snprintf(rfs_root, sizeof rfs_root, "%s", argv[1]);
     setvbuf(stdout, NULL, _IONBF, 0);
     for (int i = 0; i < NINST; i++) {
         fds[i] = socket(AF_MSM_IPC, SOCK_DGRAM, 0);

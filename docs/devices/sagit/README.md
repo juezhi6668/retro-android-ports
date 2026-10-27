@@ -31,12 +31,18 @@ on the phone (see [Status](#status)).
 | Area | State |
 | --- | --- |
 | Boot | Boots (4.4.247 kernel + KitKat system image, verified on the phone 2026-10-24). Stock by-name exists at `/dev/block/by-name`, `/dev/block/bootdevice/by-name` and `.../1da4000.ufshc/by-name`; KitKat's ueventd decides the final layout, so both mount stanzas are kept |
-| Boot image | `TARGET_PREBUILT_KERNEL := vendor/xiaomi/sagit/kernel` (stock `Image.gz-dtb`); run `scripts/patch-sagit-dtb.py` on it first |
+| Boot image | `TARGET_PREBUILT_KERNEL := vendor/xiaomi/sagit/kernel`; since 2026-10-27 that blob is the **LineageOS 17.1 KernelSU `Image.gz-dtb`** (`anykernel.sh` says `device.name1=sagit`; zip member 15774877 B, md5 `f32b9017cfa4b8a441bcae49a6758453`), swapped in for the dumped stock kernel because chiron's boot image with its own stock kernel reboot-looped until exactly this swap. `scripts/patch-sagit-dtb.py` still has to run after staging: it found both properties in all 6 appended DTBs (15774877 → 15774349 B). The previous stock blob is kept at `/home/juezhi/imgs/sagit-kernel-ba7ca7ab188114335ef58b217285ae61.bin` |
 | Display / GPU | libhyb + `fbpresentd` copied from maple; measured panel is JDI r63452 (`1080x1920p-60`, virtual `1080,3840`), density 440; `gralloc.sagit`/EGL shims expect `fb0` |
 | Touch | **`synaptics_dsx`** (`synaptics_dsx.idc`, ABS 0..1079 × 0..1919, `INPUT_PROP_DIRECT`); back/menu/home are touch keys through `Generic.kl`, only volume is in `gpio-keys.kl` |
 | USB | configfs gadget (`init.sagit.usb.rc`), UDC `a800000.dwc3` auto-detected by `usbudc.sh` |
 | Audio | tasha (WCD9341) card `msm8998-tasha-snd-card`, tinyalsa HAL + libhyb `libacdbloader`; ACDB blocks install to `/system/vendor/etc/acdbdata/Forte` (the loader hardcodes `Forte`; `hw_platform` says `SAGIT`). Speaker playback verified 2026-10-24: the loudspeaker is the **TFA9888 on QUAT_MI2S (I2S)**, not the codec — see [quirks.md](quirks.md#audio-speaker-verified-2026-10-24); headphones stay on WCD9335 (`SLIMBUS_0_RX`) |
-| WiFi | qca_cld3/qcwcn plumbing copied from maple; modem PIL firmware from the `modem` partition; the maplemodem PD keepalive problem (see [maple quirks](../maple/quirks.md)) will apply |
+| WiFi | The chiron bring-up stack is the single source of truth and is shared unchanged: `/sbin/{wf-setup,wf-efs-keeper,wf-wifi-gate,rfs-dirs,modem-hold}.sh` in the boot ramdisk, the `wf-*` services in `init.sagit.rc`, and — from `full_sagit.mk` — `sec_config`, the BDF name variants, `firmware/image/wlanmdsp.mbn`, `/system/bin/{wlq,rfssrv2,sm-vndk}`, the 64-bit vendor daemon+library closure **and `/system/bin/linker64`** (that last one is what made a clean chiron image fail: every QC daemon is aarch64 with `PT_INTERP /system/bin/linker64` and this tree builds arm-only, so without it `exec()` reports "No such file or directory"). Same WCN3990, same icnss, same UFS by-name layout, so nothing is sagit-specific; **proven on chiron, not yet run on a Mi 6**. The stack is also carried into the
+MIUI V5 (`cancro` 4.4.2) images on this device — that ROM ships a
+`libhardware_legacy.so` built with `WIFI_DRIVER_MODULE_PATH`, so its
+`wifi_load_driver()` insmods a msm8974 `wlan.ko` that can never load here and the
+toggle refuses to turn on; the V5 pack swaps in this port's AOSP library (which
+also moves the vibrator off the Mi 3 Immersion engine). Write-up:
+[chiron wifi-progress.md](../chiron/wifi-progress.md) §12 |
 | Storage | internal emulated only (no microSD); no `/vendor` partition on the stock layout — the hybrid root lives at `/system/a15` |
 | Lights | `lcd-backlight` (no `/sys/class/backlight`) + `wled`, notification `white` LED with `blink` — all measured |
 | Cellular / Camera / GPS / BT / fingerprint | Not started |
@@ -70,10 +76,12 @@ are gitignored). Paths are relative to the AOSP root (`/home/juezhi/aosp-kitkat`
 
 | What | Where it goes | How |
 | --- | --- | --- |
-| Stock 4.4 kernel blob (`Image.gz-dtb`) | `vendor/xiaomi/sagit/kernel` | `scripts/dump-sagit-stock.sh --su --pull-boot` (or pull `boot` in TWRP and split the gzip/DTB); then `scripts/patch-sagit-dtb.py vendor/xiaomi/sagit/kernel` |
+| 4.4 kernel blob (`Image.gz-dtb`) | `vendor/xiaomi/sagit/kernel` | currently the `Image.gz-dtb` member of `C:\mCloudDownload\lineage17.1_ksu.zip` (AnyKernel3, `device.name1=sagit`); the stock route (`scripts/dump-sagit-stock.sh --su --pull-boot` + split the gzip/DTB) still works if you want Xiaomi's own kernel. Either way: `scripts/patch-sagit-dtb.py vendor/xiaomi/sagit/kernel` |
 | LineageOS 22.1 (Android 15) `sagit` install zip | keep anywhere, e.g. `~/lineage-22.1-sagit.zip` | download from the LineageOS `sagit` builds; used only as the vendor closure source |
 | Android 15 vendor closure (`/system/a15`) | `vendor/xiaomi/sagit-hyb/root/` + `vendor/xiaomi/sagit-hyb/acdbdata/Forte/` | `tools/libhyb/extract-lineage.sh ~/lineage-22.1-sagit.zip /tmp/sagit-a15` then `tools/libhyb/stage.py /tmp/sagit-a15 vendor/xiaomi/sagit-hyb --acdb-name=Forte` |
-| 64-bit `fbpresentd` | `vendor/xiaomi/sagit-bin/fbpresentd` | `tools/libhyb/build-native.sh /home/juezhi/aosp-kitkat xiaomi/sagit` (needs the NDK path it expects) |
+| 64-bit `fbpresentd` | `vendor/xiaomi/sagit-bin/bin/fbpresentd` | `tools/libhyb/build-native.sh /home/juezhi/aosp-kitkat xiaomi/sagit` (needs the NDK path it expects) |
+| WLAN static binaries (`wlq`, `rfssrv2`, `sm-vndk`) | `vendor/xiaomi/sagit-bin/bin/` | `devices/chiron/kitkat/wifi-tools/build-wf-bins.sh` (linaro aarch64 `-static`; `sm-vndk` needs one AOSP build first because it patches `out/.../system/bin/servicemanager`) |
+| 64-bit Qualcomm WLAN daemons + their libraries | `vendor/xiaomi/sagit-wifi/{bin,lib64,system-lib64}/` | `devices/chiron/kitkat/wifi-tools/stage-wifi-vnd.sh`, run from Windows against a sagit/chiron phone still on its stock firmware (`adb pull` only; a KitKat phone cannot bootstrap this) |
 | Modem / ADSP / WLAN / BT firmware | `vendor/xiaomi/sagit-fw/{modem,adsp,wlan,bt}/` | copy from the device's `modem`+`bluetooth` partitions, `persist`, and `/vendor/firmware` on a rooted Lineage 22.1 install (the exact file names `init.sagit.rc`/`ueventd.sagit.rc` need are listed there) |
 | `pdserve`/PDR mapping (if the ROM's `pdc` data differs) | `vendor/xiaomi/sagit-fw/` or the in-tree `pdserve` service args | compare `vendor/etc/pd-mappings` from the ROM; maple's mapping is in `devices/maple/kitkat/` |
 | Stock-facts dump | `dumps/sagit-stock-<date>/` | `scripts/dump-sagit-stock.sh --su` (`--root` only if adbd allows `adb root`; this ROM is a production build and needs the `su` path) |

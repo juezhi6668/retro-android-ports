@@ -8,32 +8,6 @@
 dmesg > /data/misc/dmesg-boot.txt
 logcat -v threadtime -f /data/misc/logcat-boot.txt 2>/dev/null &
 
-# === WLAN bring-up finisher (WCN3990), runs EVERY boot — 2026-10-26 ===
-# The ramdisk /sbin/wf-setup.sh (an init oneshot) already creates the by-name /
-# persist symlinks, mounts debugfs, launches rfssrv2 + sm-vndk and does
-# `start wf-efs`, whose keeper respawns rmt_storage + cnss-daemon from a shell.
-# Its ONE broken step is `start wf-irsc`: KitKat init execs the 64-bit vendor
-# blob irsc_util directly, and a vendor binary exec'd by init exits silently
-# (the very reason the EFS daemons need a shell keeper). So irsc_util never runs,
-# signal_irsc_completion never fires, and on msm8998 legacy ipc-router v1 that
-# makes EVERY user-space CLIENT_PORT send stall in wait_for_irsc_completion --
-# including cnss-daemon's wlfw_bdf_download_req. No BDF, the modem never posts
-# FW_READY, and wlan0 never appears.
-#
-# Finish that one step from a loader that actually runs: our 32-bit static wlq
-# opens an IRSC port, loads sec_config, and closes it, which fires the
-# completion and unblocks cnss's send for the rest of the boot. Proven on-device
-# 2026-10-26: with this, cnss reaches icnss State 0xd8d (FW READY | DRIVER
-# PROBED), wlan0 gets a real MAC, and `wpa_supplicant -Dnl80211` scans 2.4/5 GHz.
-# The loader lives in /system/bin (survives a /data wipe); /data/local/tmp is
-# the bringup fallback location.
-WLQ=/system/bin/wlq
-[ -x $WLQ ] || WLQ=/data/local/tmp/wlq
-if [ -x $WLQ ]; then
-    $WLQ irsc /system/vendor/etc/sec_config >/data/local/tmp/wlq-irsc.log 2>&1 &
-fi
-# === end WLAN finisher ===
-
 n=0
 while true; do
     n=$((n + 1))

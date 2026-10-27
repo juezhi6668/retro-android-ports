@@ -37,6 +37,11 @@ PRODUCT_COPY_FILES += \
     vendor/xiaomi/sagit/usbudc.sh:root/sbin/usbudc.sh \
     vendor/xiaomi/chiron/ueventd.chiron.rc:root/ueventd.chiron.rc \
     vendor/xiaomi/sagit/autowinch.sh:root/sbin/autowinch.sh \
+    vendor/xiaomi/sagit/wf-setup.sh:root/sbin/wf-setup.sh \
+    vendor/xiaomi/sagit/wf-efs-keeper.sh:root/sbin/wf-efs-keeper.sh \
+    vendor/xiaomi/sagit/wf-wifi-gate.sh:root/sbin/wf-wifi-gate.sh \
+    vendor/xiaomi/sagit/rfs-dirs.sh:root/sbin/rfs-dirs.sh \
+    vendor/xiaomi/sagit/wifi/sec_config:system/vendor/etc/sec_config \
     vendor/xiaomi/sagit/dump-boot-log.sh:system/bin/dump-boot-log.sh \
     vendor/xiaomi/sagit/modem-hold.sh:root/sbin/modem-hold.sh \
     vendor/xiaomi/sagit/adsp-boot.sh:root/sbin/adsp-boot.sh \
@@ -65,6 +70,12 @@ PRODUCT_PACKAGES += \
 # back to the address in bdwlan until the phone's own persist is restored.
 SAGIT_FW := vendor/xiaomi/sagit-fw
 CHIRON_FW := vendor/xiaomi/chiron-fw
+# Prebuilt binaries built by this repo (sagit-bin: fbpresentd + the WLAN stack's
+# wlq/rfssrv2/sm-vndk) and the 64-bit WLAN vendor blobs (sagit-wifi). Both are
+# out-of-git staging inside the AOSP tree. Defined here, before their first use.
+BIN_DIR := vendor/xiaomi/sagit-bin
+WIFI_VND := vendor/xiaomi/sagit-wifi
+WF_BINS := wlq rfssrv2 sm-vndk
 ifneq ($(wildcard $(SAGIT_FW)/adsp/adsp.mdt),)
 PRODUCT_COPY_FILES += \
     $(foreach f,$(shell cd $(SAGIT_FW)/adsp && ls adsp.* cpe_* 2>/dev/null),$(SAGIT_FW)/adsp/$(f):system/vendor/firmware/$(f))
@@ -72,6 +83,14 @@ endif
 ifneq ($(wildcard $(SAGIT_FW)/modem/modem.mdt),)
 PRODUCT_COPY_FILES += \
     $(foreach f,$(shell cd $(SAGIT_FW)/modem && ls mba.mbn modem.mdt modem.b* wlanmdsp.mbn 2>/dev/null),$(SAGIT_FW)/modem/$(f):system/vendor/firmware/$(f))
+endif
+# The modem fetches the WLAN firmware image over RFS with the path
+# "readonly/firmware/image/wlanmdsp.mbn", which rfssrv2 maps to
+# /system/vendor/firmware/image/ — a second copy of the file, in the directory
+# layout stock keeps on the firmware_mnt partition. Verified on-device: the
+# 441-block read only succeeds when this exists.
+ifneq ($(wildcard $(SAGIT_FW)/modem/wlanmdsp.mbn),)
+PRODUCT_COPY_FILES += $(SAGIT_FW)/modem/wlanmdsp.mbn:system/vendor/firmware/image/wlanmdsp.mbn
 endif
 ifneq ($(wildcard $(CHIRON_FW)/audio/tas2559_uCDSP.bin),)
 PRODUCT_COPY_FILES += \
@@ -111,15 +130,46 @@ endif
 # v1 every user-space CLIENT_PORT send first calls wait_for_irsc_completion(),
 # and that completion is signalled only when an IRSC_PORT closes -- normally done
 # by the vendor irsc_util. Here irsc_util is a 64-bit blob that must be run from
-# a shell with LD_LIBRARY_PATH=/system/lib64:/vendor/lib64 (dstart/init execvp has
-# no env, and a direct `service` exec of it dies silently), so the completion
-# never fired and cnss's wlfw_bdf_download_req stalled forever: no BDF, no
-# FW_READY, no wlan0. wifi-tools/bootlog-wifi-hook.sh fires it at boot with our
-# 32-bit static wlq (`wlq irsc <sec_config>`), which loads sec_config and closes
-# the IRSC port. wlq is built by wifi-tools/build-wlq.sh and staged with the
-# other prebuilts; installed here so it survives a /data wipe.
-ifneq ($(wildcard $(BIN_DIR)/bin/wlq),)
-PRODUCT_COPY_FILES += $(BIN_DIR)/bin/wlq:system/bin/wlq
+# a shell with LD_LIBRARY_PATH=/system/lib64:/vendor/lib64 (init's exec of it
+# dies silently in ~3 s, which is why the old `service wf-irsc` never did
+# anything), so the completion never fired and cnss's wlfw_bdf_download_req
+# stalled forever: no BDF, no FW_READY, no wlan0. /sbin/wf-setup.sh fires it at
+# post-fs-data with our static wlq (`wlq irsc <sec_config>`), which loads
+# sec_config and closes the IRSC port. It has to be that early: the /system
+# boot-log hook is a class-main service and only runs at ~27 s, which pushes
+# FW_READY past the framework's first WiFi attempt.
+#   rfssrv2 (AP-side RFS/TFTP on QMI 0x1000, serves the wlanmdsp.mbn fetch) and
+# sm-vndk (vndbinder context manager for cnss's libbinder; KitKat's own
+# servicemanager with "/dev/binder" patched to "/dev/vb") complete the stack.
+# All three are built by wifi-tools/build-wf-bins.sh and staged in sagit-bin.
+# wf-setup.sh resolves them from /sbin, then /system/bin, then /data/local/tmp.
+PRODUCT_COPY_FILES += \
+    $(foreach b,$(WF_BINS),$(if $(wildcard $(BIN_DIR)/bin/$(b)),$(BIN_DIR)/bin/$(b):system/bin/$(b)))
+
+# The 64-bit WLAN vendor blobs: cnss-daemon + rmt_storage and every library they
+# resolve, including a 64-bit /system/lib64 (this tree builds arm-only, so
+# nothing else puts one on the phone). Staged out-of-git, shared with sagit --
+# these are generic Qualcomm binaries, not board-specific, and the set staged
+# here is the one this phone boots with today. Without cnss-daemon there is no
+# BDF download, and without rmt_storage held alive across SSR the modem
+# re-crashes every 41 s; both are run by /sbin/wf-efs-keeper.sh because init
+# cannot exec them.
+ifneq ($(wildcard $(WIFI_VND)/bin/cnss-daemon),)
+PRODUCT_COPY_FILES += \
+    $(foreach f,$(shell cd $(WIFI_VND)/bin && ls),$(WIFI_VND)/bin/$(f):system/vendor/bin/$(f)) \
+    $(foreach f,$(shell cd $(WIFI_VND)/lib64 && ls),$(WIFI_VND)/lib64/$(f):system/vendor/lib64/$(f)) \
+    $(foreach f,$(shell cd $(WIFI_VND)/system-lib64 && ls),$(WIFI_VND)/system-lib64/$(f):system/lib64/$(f))
+endif
+
+# Every one of those daemons is aarch64 with PT_INTERP /system/bin/linker64, and
+# this tree builds arm-only, so the 64-bit bionic linker has to be carried in
+# too. Without it exec() fails with ENOENT -- not "cannot exec format", just
+# "No such file or directory" -- so the keeper's children die instantly and the
+# modem never gets its RFS/BDF services. Staged from the same Android 10 system
+# image as the libs above (build-wf-bins.sh / stage-wifi-vnd.sh).
+ifneq ($(wildcard $(WIFI_VND)/linker64),)
+PRODUCT_COPY_FILES += \
+    $(WIFI_VND)/linker64:system/bin/linker64
 endif
 
 # Graphics: the real Adreno 540 driver (Android 15 vendor closure) + QTI
@@ -161,8 +211,7 @@ PRODUCT_COPY_FILES += \
 endif
 
 # fbpresentd: shared 64-bit MDSS presenter (sources in
-# vendor/xiaomi/sagit/fbpresentd, prebuilt in sagit-bin).
-BIN_DIR := vendor/xiaomi/sagit-bin
+# vendor/xiaomi/sagit/fbpresentd, prebuilt in sagit-bin — BIN_DIR defined above).
 ifneq ($(wildcard $(BIN_DIR)/bin/fbpresentd),)
 PRODUCT_COPY_FILES += $(BIN_DIR)/bin/fbpresentd:system/bin/fbpresentd
 endif

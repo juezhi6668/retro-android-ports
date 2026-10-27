@@ -1,26 +1,42 @@
 #!/bin/bash
-# repack-wf.sh — rebuild the chiron boot ramdisk with the WLAN bring-up stack.
+# repack-wf.sh — refresh the WLAN bring-up stack inside an already-built boot image.
 #
-# The stack has to live in the boot ramdisk, not in /system: init only runs
-# /sbin/*.sh from the ramdisk at post-fs-data (~4 s), which is the earliest
-# point at which the modem can be gated and the IRSC completion fired — see
-# wifi-progress.md. Unpacks $BASE (the known-good chiron boot image) fresh every
-# time, appends the wf block to init.chiron.rc, stages the scripts and wlq into
-# /sbin, repacks and patches the header. Run on WSL so the temp tree is on ext4.
+# The build path is `make bootimage`: init.<device>.rc carries the wf-* services
+# and full_<device>.mk stages /sbin/wf-*.sh, /sbin/rfs-dirs.sh, /sbin/modem-hold.sh
+# and the static binaries into the ramdisk. That is slow enough (device-tree sync +
+# a full build-system parse) that iterating on the bring-up scripts by hand is
+# worth a shortcut, so this one takes a built boot.img, replaces exactly those
+# files with the current device-tree copies and repacks the ramdisk.
 #
-#   WS=/mnt/c/Users/16494/Documents/Qoder/2026-10-23/4eba4900 ./repack-wf.sh
+# Run it on WSL: the temp tree has to live on ext4, and mkbootfs on a Windows
+# drive silently produces a ramdisk with every file 0700.
+#
+#   ./repack-wf.sh chiron /mnt/c/Users/16494/.../boot.img
+#   ./repack-wf.sh sagit  /home/juezhi/aosp-kitkat/out/target/product/sagit/boot.img
+#
+# writes <base>-wf.img next to the input. The base must already be a boot image
+# from this tree (its ramdisk init.<device>.rc must contain the wf block), so the
+# system side of the stack -- /system/bin/sm-vndk, /vendor/bin daemons, the BDF
+# files -- is present; only the ramdisk files are refreshed here.
 set -e
-WS=${WS:-/mnt/c/Users/16494/Documents/Qoder/2026-10-23/4eba4900}
+DEVICE=${1:?usage: repack-wf.sh <sagit|chiron> <boot.img>}
+BASE=${2:?usage: repack-wf.sh <sagit|chiron> <boot.img>}
 RT=$(cd "$(dirname "$0")" && pwd)
-BASE=$WS/boot-good.img
-OUT=$WS/boot-wf.img
-MKBOOTFS=/home/juezhi/aosp-kitkat/out/host/linux-x86/bin/mkbootfs
-WLQ=${WLQ:-/home/juezhi/aosp-kitkat/vendor/xiaomi/sagit-bin/bin/wlq}
-MODEM_HOLD=$RT/../../../sagit/kitkat/modem-hold.sh
+TREE=$(cd "$RT/../../.." && pwd)
+OUT=${BASE%.img}-wf.img
+MKBOOTFS=${MKBOOTFS:-/home/juezhi/aosp-kitkat/out/host/linux-x86/bin/mkbootfs}
+BIN_DIR=${BIN_DIR:-/home/juezhi/aosp-kitkat/vendor/xiaomi/sagit-bin/bin}
 
-[ -f "$BASE" ] || { echo "FATAL: no base image at $BASE (set WS=)" >&2; exit 1; }
-[ -x "$WLQ" ] || { echo "FATAL: no wlq at $WLQ (run build-wlq.sh)" >&2; exit 1; }
-[ -f "$MODEM_HOLD" ] || { echo "FATAL: no modem-hold.sh at $MODEM_HOLD" >&2; exit 1; }
+SH=$TREE/sagit/kitkat            # the scripts are shared: same WCN3990, same icnss
+DEV=$TREE/$DEVICE/kitkat
+[ -f "$BASE" ]      || { echo "FATAL: no base image at $BASE" >&2; exit 1; }
+[ -x "$MKBOOTFS" ]  || { echo "FATAL: no mkbootfs at $MKBOOTFS" >&2; exit 1; }
+[ -f "$DEV/init.$DEVICE.rc" ] || { echo "FATAL: no $DEV/init.$DEVICE.rc" >&2; exit 1; }
+grep -q "service wf-setup" "$DEV/init.$DEVICE.rc" || {
+    echo "FATAL: $DEV/init.$DEVICE.rc lost the WLAN block" >&2; exit 1; }
+for b in wlq rfssrv2 sm-vndk; do
+    [ -x "$BIN_DIR/$b" ] || { echo "FATAL: no $BIN_DIR/$b (run build-wf-bins.sh)" >&2; exit 1; }
+done
 
 cd /tmp
 rm -rf rdf
@@ -42,64 +58,33 @@ EOF
 gunzip -c ramdisk.gz | cpio -idm 2>/dev/null
 rm -f ramdisk.gz
 
-grep -q "service wf-setup" init.chiron.rc && {
-    echo "FATAL: $BASE already contains the wf block; unpack a pristine image" >&2
-    exit 1
-}
-cat "$RT/wf-block-append.rc" >> init.chiron.rc
-# post-fs-data runs with /system mounted, but keep the scripts in the ramdisk
-# anyway (/sbin) so they also work if a trigger is moved earlier and so they
-# survive a system-image swap.
-for f in wf-setup.sh wf-efs-keeper.sh wf-wifi-gate.sh; do
-    cp "$RT/$f" "sbin/$f"
+# The in-tree rc replaces the one in the image wholesale -- including its
+# comments, so what boots is what is in git.
+cp "$DEV/init.$DEVICE.rc" "init.$DEVICE.rc"
+for f in wf-setup.sh wf-efs-keeper.sh wf-wifi-gate.sh rfs-dirs.sh modem-hold.sh; do
+    cp "$SH/$f" "sbin/$f"
     chmod 755 "sbin/$f"
 done
-cp "$MODEM_HOLD" sbin/modem-hold.sh
-chmod 755 sbin/modem-hold.sh
+for b in wlq rfssrv2 sm-vndk; do
+    cp "$BIN_DIR/$b" "sbin/$b"
+    chmod 755 "sbin/$b"
+done
+# The device-tree files are edited from Windows, so they can arrive CRLF; a
+# stray \r kills the #! line and every `[ -x ... ]` test on the device.
+sed -i 's/\r$//' "init.$DEVICE.rc" sbin/wf-setup.sh sbin/wf-efs-keeper.sh \
+    sbin/wf-wifi-gate.sh sbin/rfs-dirs.sh sbin/modem-hold.sh
+# Older images gated the modem boot on /etc/rfs_gate; modem-hold.sh now keys off
+# the presence of /sbin/wf-setup.sh, so the marker has to go or a stale file
+# keeps it waiting.
+rm -f etc/rfs_gate
 
-# Static IRSC loader. It has to be in the ramdisk because wf-setup.sh fires the
-# ipc-router completion at post-fs-data, and /sbin is the only path guaranteed
-# to exist that early (and to survive a system-image swap).
-cp "$WLQ" sbin/wlq
-chmod 755 sbin/wlq
-# The device-tree sources are edited from Windows too, so they can arrive CRLF;
-# a stray \r kills the #! line and every `[ -x ... ]` test on the device.
-sed -i 's/\r$//' sbin/wf-setup.sh sbin/wf-efs-keeper.sh sbin/wf-wifi-gate.sh \
-    sbin/modem-hold.sh init.chiron.rc
-
-# Gate the modem boot on rfssrv2 readiness (see modem-hold.sh). The gate file is
-# what opts a boot image into waiting, so sagit builds stay unaffected.
-mkdir -p etc
-: > etc/rfs_gate
-
-# init starts the whole post-fs-data action list in file order, so modem_hold
-# would still be started before wf-setup could signal readiness; `disabled`
-# makes init ignore the early start, and wf-setup starts it after the gate.
-python3 - <<'EOF'
-import re
-src = open('init.chiron.rc', 'rb').read().decode('utf-8', errors='replace')
-m = re.search(r'service modem_hold[^\n]*\n(?:[ \t][^\n]*\n)+', src)
-assert m, 'modem_hold service stanza not found'
-stanza = m.group(0)
-if 'disabled' not in stanza:
-    src = src.replace(stanza, stanza.rstrip('\n') + '\n    disabled\n', 1)
-open('init.chiron.rc', 'wb').write(src.encode('utf-8'))
-EOF
-sed -n '/service modem_hold/,/^$/p' init.chiron.rc
-echo "--- wf services ---"
-grep -n "service wf-" init.chiron.rc
-
-for f in init.chiron.rc sbin/wf-setup.sh sbin/wf-efs-keeper.sh sbin/wf-wifi-gate.sh \
-         sbin/modem-hold.sh sbin/wlq etc/rfs_gate; do
+for f in "init.$DEVICE.rc" sbin/wf-setup.sh sbin/rfssrv2 sbin/sm-vndk sbin/wlq; do
     [ -e "$f" ] || { echo "FATAL: $f missing from the staged ramdisk" >&2; exit 1; }
 done
 
 $MKBOOTFS /tmp/rdf | gzip -9 > ramdisk.gz
 NEW=$(stat -c%s ramdisk.gz)
 echo "new ramdisk: $NEW bytes"
-# boot-good.img's own ramdisk is ~330 KB and the stack adds a static wlq;
-# anything far smaller means the extraction or the mkbootfs walk went wrong and
-# the image would not boot.
 if [ "$NEW" -lt 250000 ]; then
     echo "FATAL: ramdisk is only $NEW bytes, refusing to write $OUT" >&2
     exit 1

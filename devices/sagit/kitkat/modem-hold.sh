@@ -26,9 +26,14 @@
 # client registers once at boot; if the AP-side RFS/TFTP server (rfssrv2) is
 # not listening yet the modem gets no answer and never retries, so
 # wlanmdsp.mbn is never fetched and WLFW/wlan0 never appear. wf-setup.sh
-# touches the ready file after rfssrv2 announces its ports. Absent the gate
-# file (sagit, or any ramdisk without the WLAN stack) this is a no-op.
-if [ -f /etc/rfs_gate ]; then
+# touches the ready file after rfssrv2 announces its ports.
+#
+# The presence of /sbin/wf-setup.sh *is* the opt-in: it and this script are both
+# copied into the boot ramdisk by the same product mk, so an image without the
+# WLAN stack (or a system-only flash) never waits, and there is no separate gate
+# file to keep in sync. Bounded at 60 s so a broken stack cannot hold the modem
+# hostage forever.
+if [ -f /sbin/wf-setup.sh ]; then
     g=0
     while [ ! -f /data/local/tmp/rfssrv2.ready ] && [ "$g" -lt 60 ]; do
         echo "modem-hold: waiting for rfssrv2 ($g)" > /dev/kmsg

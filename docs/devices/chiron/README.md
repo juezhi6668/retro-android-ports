@@ -29,7 +29,7 @@ by `TARGET_DEVICE` (`audio.primary.chiron`, `gralloc.chiron`,
 | Boot | Boots to the UI on the stock `OS3` kernel (Linux 4.4.302, multi-DTB: `dtb_0` sagit id `0x1e`, `dtb_1` chiron id `0x20`) — verified on hardware 2026-10-25. The boot image is built with `BOARD_KERNEL_BASE := 0x00000000` / `pagesize 4096` so its layout (kernel `0x8000`, ramdisk `0x1000000`, tags `0x100`) matches the stock image |
 | Display / GPU | Adreno 540 through libhyb + `fbpresentd`; panel `1080x2160`, density 440, stride 4352. SurfaceFlinger reaches the driver (ES 3.2, first frames swap) |
 | Audio | WCD9341 tasha codec + **TAS2559** smart amp with its TAS2560 companion on QUAT_MI2S (I2S). Headphones use the AIF4 path on `SLIMBUS_6_RX` (SLIM RX2/RX3 → RX INT1_2/INT2_2). Builtin mic is DEC7/AMIC3, headset mic DEC0/ADC2. `mixer_paths_tasha.xml` is taken from the stock dump; the routes are compiled in but **not yet verified by playback** |
-| WiFi | qca_cld3/qcwcn plumbing copied from sagit. The stock dump has no `bdwlan` and the phone's `persist` partition is **empty**, so sagit's WCN3990 `bdwlan` is the current fallback and there is no provisioned MAC — WLAN is unverified |
+| WiFi | **Works, boot-automatic, verified on a freshly built image cold-booted on hardware 2026-10-27** (association + DHCP, and the Settings/`svc wifi` toggle both directions; earlier milestone 2026-10-26 on hand-pushed files). The whole WCN3990 bring-up stack is shared with sagit and installed by the build: `/sbin/{wf-setup,wf-efs-keeper,wf-wifi-gate,rfs-dirs,modem-hold}.sh` in the ramdisk, the `wf-*` services in `init.chiron.rc`, `sec_config`, the BDF name variants, `wlanmdsp.mbn`, `/system/bin/{wlq,rfssrv2,sm-vndk,linker64}` and the 64-bit vendor daemon/library closure — `linker64` because those daemons are aarch64 and this tree builds arm-only. Root cause was the msm8998 ipc-router IRSC completion never firing; the two fresh-image prerequisites (linker64, `/dev/block/bootdevice` alias) are [wifi-progress.md](wifi-progress.md) §11. `persist` is empty, so the MAC comes from the firmware, not from provisioning |
 | Storage | Internal emulated only; `system` 3 GiB. `persist` mounts but contains nothing (no WiFi MAC, no TAS2559 calibration) |
 | Touch | Synaptics DSX, `synaptics_dsx.idc` reused from sagit — confirm the device name with `getevent -p` |
 | USB | configfs gadget, UDC `a800000.dwc3` (same as sagit) |
@@ -109,6 +109,8 @@ here is committed.
 | ACDB calibration | `vendor/xiaomi/chiron-hyb/acdbdata/` | copy `ChironS/`, `Forte/` and `adsp_avs_config.acdb` from the stock `/vendor/etc/acdbdata` |
 | Modem / ADSP / WLAN firmware | `vendor/xiaomi/sagit-fw/` (reused) | same MSM8998 blobs as sagit (`mba.mbn`, `modem.*`, `adsp.*`, `cpe_*`, `bdwlan*`); replace the WLAN board data with chiron's once a source is found |
 | Android 15 vendor closure + `fbpresentd` | `vendor/xiaomi/sagit-hyb/root/`, `vendor/xiaomi/sagit-bin/bin/` | reused from the sagit port (`tools/libhyb/`) |
+| WLAN vendor daemons + 64-bit libraries | `vendor/xiaomi/sagit-wifi/{bin,lib64,system-lib64}/` | `devices/chiron/kitkat/wifi-tools/stage-wifi-vnd.sh` against a phone on stock firmware (see [wifi-progress.md §10](wifi-progress.md)) |
+| `wlq` / `rfssrv2` / `sm-vndk` | `vendor/xiaomi/sagit-bin/bin/` | `devices/chiron/kitkat/wifi-tools/build-wf-bins.sh` |
 | `system.prop`, `fstab`, `init*`, `ueventd`, mixer, WLAN ini | in tree | already captured from the stock dump |
 
 ## Documentation and links

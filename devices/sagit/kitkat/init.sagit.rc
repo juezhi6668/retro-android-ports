@@ -239,3 +239,75 @@ service iprenew_p2p /system/bin/dhcpcd -n
     class main
     disabled
     oneshot
+
+# ---- WLAN bring-up stack (WCN3990 behind the modem's wlan_pd) --------------
+# sagit and chiron share the WCN3990 + msm8998 legacy ipc-router, so this block
+# is identical in both init files; the scripts live in devices/sagit/kitkat/ and
+# land in the boot ramdisk as /sbin (full_sagit.mk / full_chiron.mk).
+#
+# Why these are not ordinary init services:
+#  - rmt_storage and cnss-daemon are 64-bit vendor binaries. Exec'd directly by
+#    KitKat init they exit silently in ~3 s; the identical command line from a
+#    shell lives forever. wf-efs-keeper.sh owns them and respawns them across
+#    SSRs — without that the modem self-crashes every 41 s and never gets a long
+#    enough life to load wlanmdsp.mbn.
+#  - the ipc-router IRSC completion gates every user-space QMI sendmsg on this
+#    kernel and only fires when an IRSC_PORT is closed. Nothing here ever closed
+#    one, so cnss-daemon's wlfw_bdf_download_req hung forever: no BDF, no
+#    FW_READY, no wlan0. wf-setup.sh fires it at post-fs-data with the static
+#    wlq (installed as /system/bin/wlq by the build, /sbin/wlq in a repacked
+#    image), which is early enough that wlan0 exists before the framework
+#    first touches WiFi. Full write-up: docs/devices/chiron/wifi-progress.md.
+#  - the framework race is only *mostly* won: WifiService auto-enables at ~29 s
+#    while icnss reaches FW_READY at ~41 s, and WifiMonitor.startMonitoring()
+#    burns 6 connect tries and then drops wlan0 from its iface map for the rest
+#    of the boot. So wf-setup.sh keeps wpa_supplicant.conf root:root 0600 during
+#    that window (the attempt then fails inside wifi.c before init is touched,
+#    which IS recoverable), and wf-wifi-gate.sh unlocks it as soon as wlan0
+#    appears and drives the single genuine off->on toggle that SettingsStore
+#    accepts — handleWifiToggled() ignores a request for the state it already
+#    tracks, so a bare `svc wifi enable` with wifi_on already 1 does nothing.
+#
+# Everything is `disabled` and started from the action below, so no part of this
+# depends on class_start ordering.
+on post-fs-data
+    start wf-setup
+    start wf-efs
+    start wf-wifi-gate
+
+service wf-setup /system/bin/sh /sbin/wf-setup.sh
+    class main
+    user root
+    group root
+    oneshot
+    disabled
+
+service wf-efs /system/bin/sh /sbin/wf-efs-keeper.sh
+    class main
+    user root
+    group root
+    disabled
+    respawn
+
+# vndbinder context manager: the vendor cnss-daemon's libbinder waits forever
+# for a context manager on /dev/vndbinder. This kernel has vndbinder but KitKat
+# ships none, so sm-vndk is KitKat's own static servicemanager with its
+# "/dev/binder" string patched to "/dev/vb" (wifi-tools/patch-sm-vndk.py), and
+# wf-setup.sh makes /dev/vb -> /dev/vndbinder.
+service wf-sm /system/bin/sm-vndk
+    class main
+    user root
+    group root
+    disabled
+    respawn
+
+# One boot-time pass: unlock the supplicant config when the driver shows up,
+# then drive the off->on toggle. oneshot on purpose — the script exits as soon
+# as the framework reports enabled, and a respawn loop would keep spawning a
+# Dalvik `settings`/`dumpsys` client for nothing.
+service wf-wifi-gate /system/bin/sh /sbin/wf-wifi-gate.sh
+    class main
+    user root
+    group root
+    disabled
+    oneshot

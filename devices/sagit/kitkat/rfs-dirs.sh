@@ -1,12 +1,14 @@
 #!/system/bin/sh
-# rfs-dirs.sh — build the RFS tree the Android 15 tftp_server serves to the modem.
+# rfs-dirs.sh — build the RFS tree the AP-side RFS/TFTP server serves the modem.
 #
-# The modem (msm/mpss) reads and writes files through RFS: tftp_server answers
-# those requests on the qsocket transport and maps them under
-# /system/vendor/rfs/<arch>/<subsys> (stock: /vendor/rfs/...). The tree is a
-# skeleton of directories plus five symlinks per subsystem, so it belongs in
-# the image — but PRODUCT_COPY_FILES copies straight through symlinks, so it is
-# built at boot instead.
+# The modem (msm/mpss) reads and writes files through RFS: rfssrv2 answers those
+# requests on the qsocket transport and maps them under its root
+# (/data/rfs/<arch>/<subsys> by default, see wifi-tools/rfssrv2.c). Stock keeps
+# this tree in /vendor/rfs; this port cannot, because /vendor is /system/vendor
+# and /system is read-only, so neither the skeleton nor the modem's WRQs
+# (mcfg.tmp round-trip) would ever land. It is built at boot instead:
+# PRODUCT_COPY_FILES cannot carry symlinks, and /data is mounted by the time
+# wf-setup.sh runs.
 #
 # The layout mirrors lineage-22.1's vendor/rfs exactly, except for the targets
 # of the data links: stock puts them on /mnt/vendor/persist (the persist
@@ -19,10 +21,12 @@
 # (wlanmdsp.mbn) from; readwrite/shared/hlos are its log and hive areas;
 # ramdumps land in /data.
 set -e
-R=/system/vendor/rfs
+R=/data/rfs
 P=/persist
 
-mkdir -p $P/rfs/shared $P/hlos_rfs/shared /data/vendor/tombstones/rfs
+mkdir -p $P/rfs/shared
+mkdir -p $P/hlos_rfs/shared
+mkdir -p /data/vendor/tombstones/rfs
 mkdir -p /data/vendor/pddump
 
 # KitKat's toolbox ln only takes a bare -s: "ln -sfn TARGET LINK" fails with
@@ -43,7 +47,11 @@ for sub in msm/adsp msm/cdsp msm/mpss msm/slpi \
 	esac
 
 	d=$R/$sub
-	mkdir -p $d/readonly/vendor $P/rfs/$sub /data/vendor/tombstones/rfs/$rd
+	# One operand per mkdir: KitKat's toolbox stops at the first operand that
+	# fails, which with set -e would drop the rest of this subsystem tree.
+	mkdir -p $d/readonly/vendor
+	mkdir -p $P/rfs/$sub
+	mkdir -p /data/vendor/tombstones/rfs/$rd
 	mklink $P/rfs/$sub $d/readwrite
 	mklink $P/rfs/shared $d/shared
 	mklink $P/hlos_rfs/shared $d/hlos
