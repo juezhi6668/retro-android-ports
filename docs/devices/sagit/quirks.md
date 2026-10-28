@@ -280,10 +280,11 @@ What is specific to running a *prebuilt* ROM here:
   attributes are created `root:root 0644`, while LightsService runs in system_server (uid
   system), so every HAL write returns EACCES; MIUI's own `init.rc` only chowns the three
   colour-named nodes that do not exist. Fix = this port's AOSP `lights.msm8998.so`
-  (`devices/sagit/kitkat/lights/lights.c`, repo commit `0ec68b5`) installed into the V5 image
-  under **both** lookup names — `lights.sagit.so` (what that ROM's `ro.hardware=sagit`
-  resolves first) and `lights.msm8974.so` (the cancro fallback key, i.e. the file V5 actually
-  loads) — plus the `on boot` chown stanza sliced into the V5 ramdisk. That stanza sits *before*
+  (`devices/sagit/kitkat/lights/lights.c`, repo commit `0ec68b5`) installed into the V5 image —
+  at first under **both** lookup names, `lights.sagit.so` and `lights.msm8974.so`, until the
+  V5 image itself was renamed to `androidboot.hardware=msm8998` (2026-10-28), after which
+  `lights.msm8998.so` is the one and only copy — plus the `on boot` chown stanza sliced into
+  the V5 ramdisk. That stanza sits *before*
   the `# ---- WLAN bring-up stack` marker that `repack-v5-boot.sh` appends from, so the repack
   has to `sed`-slice it out of `init.msm8998.rc` separately; it stays its own stanza because a
   chown onto a missing node aborts the rest of the action.
@@ -327,6 +328,50 @@ byte-exact. Verified at 60 s of uptime: the three `white/` attributes are `syste
 i.e. our module is the loaded one, `cat /sys/class/leds/white/brightness` returns 149, and
 `echo none > trigger; echo 255 > brightness; echo 1 > blink` arms the breathing pattern.
 Write-up: section 15 of [chiron/wifi-progress.md](../chiron/wifi-progress.md).
+
+**V5 renamed to `msm8998` too (2026-10-28, not yet flashed).** Repo commit `e8bd0dd` gave the
+AOSP artifacts one set of names per board; the V5 image was then moved to the same scheme, so
+there is no longer a "V5 name" and an "AOSP name" for the same file:
+
+- cmdline `androidboot.hardware=sagit` → `=msm8998`. The ramdisk is patched in the header's
+  512-byte cmdline field (offset 64) by `repack-v5-boot.sh`; nothing else in the image reads
+  `ro.hardware` except HAL lookup and `init.rc`'s `import /init.${ro.hardware}.rc`.
+- ramdisk `init.sagit.rc` / `init.sagit.usb.rc` / `ueventd.sagit.rc` / `fstab.sagit` →
+  `init.msm8998.rc` / `init.msm8998.usb.rc` / `ueventd.msm8998.rc` / `fstab.msm8998`, plus the
+  `import /init.sagit.usb.rc` inside the device rc.
+- `/system/lib/hw`: `gralloc.msm8998.so`, `lights.msm8998.so`, `audio.primary.msm8998.so`,
+  `audio_policy.msm8998.so`; the old `*.sagit.so` / `*.msm8974.so` copies are **deleted**
+  (pristine copies in `~/mi5-wifi/backup/naming/`) so `hw_get_module` cannot pick a stale one.
+- `libEGL_adreno.so` is swapped in the same step: the shim dlopens a hardcoded path.
+- Safe because `ro.product.board=MSM8974` / `ro.board.platform=msm8974` stay as they are, so
+  camera and the other MIUI `*.msm8974.so` modules still resolve through the fallback keys and
+  `msm8998` only wins for the four files installed under that name. `/system` and `/data` are
+  mounted by explicit `mount ext4 …` lines in the device rc (no `mount_all`, no vold), so
+  `fstab.msm8998` is inert. The replaced audio HALs were already this port's builds
+  (`audio_policy.msm8974.so` was byte-identical to our `audio_policy.default.so`), so MIUI's
+  own audio path is untouched.
+
+New pair: `boot-mi5-msm8998.img` md5 `f3aaaa65f27809a6ec99b59c4ed23b20` (ramdisk 343096,
+kernel byte-identical to the LED image) + `system_miui5_msm8998.img` md5
+`aca214389a6db23f683698c9fc5142c1`, packaged in `C:\download\chiron\sagit-v5-naming-20261028\`.
+`verify-v5-wifi.sh` compares 70 files against the AOSP build: 0 mismatches, no stale names.
+**Static checks only — the phone still runs the `-led-` pair, both halves must be flashed
+together and cold-booted.**
+
+**V5 boot with the healthd charging fix (2026-10-28, not yet flashed).** Charging while
+booted showed no indicator on the status bar or lock screen: V5's `/sbin/healthd` is stock
+KitKat and only classifies `Unknown/Battery/UPS/Mains/USB/USB_DCP/USB_CDP/USB_ACA/Wireless`,
+while this kernel's smb2/smb5 reports the negotiated mode (`USB_HVDCP`, `USB_HVDCP_3`,
+`USB_PD`, `USB_FLOAT` …) → unknown type → `plugged` 0. The boot in
+`C:\download\chiron\sagit-v5-charge-20261028\` (md5 `a1b99d6bf7c7652d35ecdb04238affd4`,
+ramdisk 343124) is the `-msm8998-` boot with **only** `/sbin/healthd` replaced by the binary
+from `patches/kitkat/system-core-healthd-msm-power-supply-types.patch` (md5
+`65399232bc14a69852dd4b75defc6078`); the kernel section is `cmp`-identical to
+`boot-mi5-msm8998.img`, the cmdline and the ramdisk file list are unchanged. The system
+image is untouched — flash `boot` alone. Healthd runs `service healthd /sbin/healthd` from
+`init.rc`, so nothing else has to be wired. Same fix went into the chiron AOSP boot. See
+the "KitKat userspace on a 4.4 kernel" bullet in
+[porting-notes/kitkat.md](../../advanced/porting-notes/kitkat.md).
 
 ## MIUI V7 4.4.4 (`cancro`) pack deltas
 

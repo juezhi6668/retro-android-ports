@@ -844,6 +844,20 @@ lessons:
 - vold/adbd/rild crash-loop triage from cooper applies: guard NULL
   uevent fields, split-pipe adbd diagnosis if pty misbehaves, comment out
   `ril-daemon` until an RIL lib exists for the SoC.
+- **healthd's power-supply type table is the KitKat list, the charger speaks msm-4.4**
+  (sagit/chiron V5 + chiron AOSP, 2026-10-28). `readPowerSupplyType()` only maps
+  `Unknown/Battery/UPS/Mains/USB/USB_DCP/USB_CDP/USB_ACA/Wireless`, but an msm-4.4
+  smb2/smb5 reports the *negotiated* mode as `type` — `USB_HVDCP`, `USB_HVDCP_3`,
+  `USB_PD`, `USB_FLOAT`, `Main`, `Parallel`, `Wipower` — so the `type` read falls into
+  the unknown branch, `plugged` stays `0`, and no KitKat UI ever shows charging (the
+  battery does charge; only the indication is missing). `dumpsys battery | grep plugged`
+  is the giveaway, and `dmesg` may show healthd's "Unknown power supply type". The type
+  is also only enumerated once at healthd start, so a port that boots on a fast charger
+  never watches the node. Repo patch
+  [`system-core-healthd-msm-power-supply-types.patch`](../../../patches/kitkat/system-core-healthd-msm-power-supply-types.patch)
+  adds those names and treats any unrecognised `USB_*` as `AC`. healthd is a static
+  32-bit ARM executable installed as `/sbin/healthd` in the boot ramdisk, so the rebuilt
+  binary drops into a MIUI ramdisk too, with the kernel section untouched.
 
 ## Container gotchas (to fill in once built)
 

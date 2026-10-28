@@ -746,6 +746,62 @@ md5 `396e31bb43b5baf53d8a966ce0db00e9`（sha256 `2b0338e574f4bf07f5221502c6dcb28
 `C:\download\chiron\sagit-v5-led-20261028\{boot.img,system.img,FLASH.md}`，WSL 副本 `~/mi5-wifi/out/`。
 sagit 的 V5 至此有：WiFi、墙钟、通知灯（震动/导航栏那两条是 chiron pack 的事，sagit 这边不涉及）。
 
+## 16. V5 也改成 msm8998 命名（2026-10-28，镜像已打，未刷机）
+
+仓库 commit `e8bd0dd`（"name the board HALs and ramdisk files after the SoC, not the phone"）
+把 AOSP 侧的 `gralloc/lights/audio.primary` 和开机 ramdisk 的 rc/fstab 全部收敛成一份 msm8998
+文件（两块板子 `androidboot.hardware=msm8998`）。用户要求 V5 也统一过去，于是 MIUI V5 这份
+预构建 ROM 从"按 ROM 自己的名字装"改成"和 AOSP 用同一套名字"。
+
+改的是仓库外的三个打包脚本（`~/mi5-wifi/`）：
+
+- `repack-v5-boot.sh`：解出 ramdisk 后先把四个文件改名（`init.sagit.rc`→`init.msm8998.rc`、
+  `init.sagit.usb.rc`→`init.msm8998.usb.rc`、`ueventd.sagit.rc`→`ueventd.msm8998.rc`、
+  `fstab.sagit`→`fstab.msm8998`），再把设备 rc 里那句 `import /init.sagit.usb.rc` 一起改掉，
+  最后重写 boot header **64 偏移处那 512 字节的 cmdline**：`androidboot.hardware=sagit` →
+  `=msm8998`（找不到 `androidboot.hardware` 或字段放不下就 FATAL，不写镜像）。
+- `inject-v5-system.sh`：装 `gralloc.msm8998.so`、`lights.msm8998.so`、
+  `audio.primary.msm8998.so`、`audio_policy.msm8998.so`（policy 用 AOSP 的
+  `audio_policy.default.so`，和 V5 里原来那份字节相同），同一个步骤里换掉
+  `/system/lib/egl/libEGL_adreno.so`（shim 里 gralloc 路径是写死的），然后把
+  `gralloc.sagit.so` / `gralloc.msm8974.so` / `lights.sagit.so` / `lights.msm8974.so` /
+  `audio.primary.msm8974.so` / `audio_policy.msm8974.so` **删掉**（原件备份到
+  `~/mi5-wifi/backup/naming/`）——留着就成了"新名字 + 旧名字"两份，旧的那份恰好是错的。
+- `verify-v5-wifi.sh`：五个 msm8998 文件逐个 md5 对 AOSP，再反向检查六个旧名字是否残留
+  （有就报 STALE）。当前 70 个文件、0 处不一致。
+
+为什么可以动 MIUI 的 ramdisk 而不会把系统搞挂（逐条核对过）：
+
+1. `init.rc` 里是 `import /init.${ro.hardware}.rc`，cmdline 和文件名是一起变的；`ueventd`、
+   `vold` 用同一个属性推自己的文件名。
+2. `/system`、`/data`、`/cache`、`/persist` 在 `init.msm8998.rc` 里都是**显式 `mount ext4 …`**，
+   整个 ramdisk 没有 `mount_all`，也没有 `/sbin/vold`（system 里同样没有 vold），所以
+   `fstab.*` 改不改名都不参与挂载，纯属命名一致。
+3. `ro.product.board=MSM8974`、`ro.board.platform=msm8974` 保持不动 —— `hw_get_module` 的
+   variant key 顺序是 `ro.hardware` → `ro.product.board` → `ro.board.platform` → `default`，
+   所以 camera/consumerir 这些 MIUI 自己的 `*.msm8974.so` 仍走兜底 key，`msm8998` 只对装了的
+   那四个模块生效。
+4. 换掉的三份 HAL 本来就是本项目的产物：旧的 `audio.primary.msm8974.so` 里 SONAME 是
+   `audio.primary.sagit.so`、依赖表和符号表与新的逐项一致（只差名字长度 4 字节），
+   `audio_policy.msm8974.so` 与我们的 `audio_policy.default.so` md5 相同。MIUI 自己的音频路径
+   没有被换掉。
+5. `libEGL_adreno.so` 与上一版的差别只有 gralloc 路径和日志字符串，导出的
+   `sagit_gralloc_import` 不变；GLES 两个 shim 字节相同，不用动。
+6. 全镜像里另一处读 `ro.hardware` 的是 MIUI 的 `bin/set_sensorprop.sh`，它依据的是
+   `ro.boot.hwversion`，与本属性无关（sensors 不受影响）。
+7. kernel 段与上一版逐字节相同（15774877 B），ramdisk 里 MIUI 的
+   `-O/data/misc/wifi/sockets`、`socket wpa_wlan0`、`setprop wifi.interface wlan0`、四个
+   `wf-*` service、`pdserve`、LED chown 全部原样保留。
+
+成品（**取代** §15 那对）：`boot-mi5-msm8998.img` md5
+`f3aaaa65f27809a6ec99b59c4ed23b20`（ramdisk 343096，sha256
+`4c614bc20e1d8f751a844efe0ea7d03a821cdf2f62d1a87fd99e11f8d6e50b5c`）+ `system_miui5_msm8998.img`
+md5 `aca214389a6db23f683698c9fc5142c1`（sha256
+`d179754e7c5ecb783d04895ec57403bf29de2536b430291d91a7f92265dc3cf4`，e2fsck 干净），打包在
+`C:\download\chiron\sagit-v5-naming-20261028\{boot.img,system.img,FLASH.md}`，WSL 副本
+`~/mi5-wifi/out/`。**还没刷**：boot 和 system 是同一个改名的两头，必须一起刷、冷启动，
+按 FLASH.md 里的三条回归项（开机画面、WiFi、时钟 + 灯）过一遍。
+
 ## 4. 红线（用户规矩，必须遵守）
 
 - 抓完日志立即 adb reboot recovery，别让手机一直亮屏耗电。

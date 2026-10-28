@@ -104,6 +104,12 @@ out/host/linux-x86/bin/simg2img out/target/product/chiron/system.img out/target/
 partition. The kernel blob (`vendor/xiaomi/chiron/kernel`) and all staging
 directories are gitignored.
 
+The ramdisk's `/sbin/healthd` comes from a `system/core` checkout carrying
+[`system-core-healthd-msm-power-supply-types.patch`](../../../patches/kitkat/system-core-healthd-msm-power-supply-types.patch).
+Without it `plugged` never leaves 0 on this kernel (the charger reports
+`USB_HVDCP`/`USB_PD`/`USB_FLOAT`, which stock KitKat does not know), so a
+rebuilt boot that skips the patch loses the charging indicator again.
+
 ## Files you must provide (and where they go)
 
 Paths are relative to the AOSP root (`/home/juezhi/aosp-kitkat`); nothing

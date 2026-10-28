@@ -1,0 +1,43 @@
+diff --git a/healthd/BatteryMonitor.cpp b/healthd/BatteryMonitor.cpp
+index 688c7ff..bb21ec7 100644
+--- a/healthd/BatteryMonitor.cpp
++++ b/healthd/BatteryMonitor.cpp
+@@ -126,11 +126,21 @@ BatteryMonitor::PowerSupplyType BatteryMonitor::readPowerSupplyType(const String
+             { "Battery", ANDROID_POWER_SUPPLY_TYPE_BATTERY },
+             { "UPS", ANDROID_POWER_SUPPLY_TYPE_AC },
+             { "Mains", ANDROID_POWER_SUPPLY_TYPE_AC },
++            { "Main", ANDROID_POWER_SUPPLY_TYPE_AC },
++            { "Parallel", ANDROID_POWER_SUPPLY_TYPE_AC },
++            { "BMS", ANDROID_POWER_SUPPLY_TYPE_AC },
+             { "USB", ANDROID_POWER_SUPPLY_TYPE_USB },
+             { "USB_DCP", ANDROID_POWER_SUPPLY_TYPE_AC },
+             { "USB_CDP", ANDROID_POWER_SUPPLY_TYPE_AC },
+             { "USB_ACA", ANDROID_POWER_SUPPLY_TYPE_AC },
++            { "USB_HVDCP", ANDROID_POWER_SUPPLY_TYPE_AC },
++            { "USB_HVDCP_3", ANDROID_POWER_SUPPLY_TYPE_AC },
++            { "USB_HVDCP_3P", ANDROID_POWER_SUPPLY_TYPE_AC },
++            { "USB_PD", ANDROID_POWER_SUPPLY_TYPE_AC },
++            { "USB_PD_DRP", ANDROID_POWER_SUPPLY_TYPE_AC },
++            { "USB_FLOAT", ANDROID_POWER_SUPPLY_TYPE_AC },
+             { "Wireless", ANDROID_POWER_SUPPLY_TYPE_WIRELESS },
++            { "Wipower", ANDROID_POWER_SUPPLY_TYPE_WIRELESS },
+             { NULL, 0 },
+     };
+ 
+@@ -138,8 +148,14 @@ BatteryMonitor::PowerSupplyType BatteryMonitor::readPowerSupplyType(const String
+         return ANDROID_POWER_SUPPLY_TYPE_UNKNOWN;
+ 
+     ret = (BatteryMonitor::PowerSupplyType)mapSysfsString(buf, supplyTypeMap);
+-    if (ret < 0)
+-        ret = ANDROID_POWER_SUPPLY_TYPE_UNKNOWN;
++    if (ret < 0) {
++        // msm-4.4's smb2/smb5 charger reports the negotiated mode as the type
++        // (USB_HVDCP, USB_PD, USB_FLOAT...); an unknown USB_* is still a powered port.
++        if (!strncmp(buf, "USB_", 4))
++            ret = ANDROID_POWER_SUPPLY_TYPE_AC;
++        else
++            ret = ANDROID_POWER_SUPPLY_TYPE_UNKNOWN;
++    }
+ 
+     return ret;
+ }
