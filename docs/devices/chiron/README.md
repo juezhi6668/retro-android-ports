@@ -38,7 +38,161 @@ MIUI V5 pack installs them under the ROM's own names
 | Storage | Internal emulated only; `system` 3 GiB. `persist` mounts but contains nothing (no WiFi MAC, no TAS2559 calibration) |
 | Touch | Synaptics DSX, `synaptics_dsx.idc` reused from sagit — confirm the device name with `getevent -p` |
 | USB | configfs gadget, UDC `a800000.dwc3` (same as sagit) |
-| Cellular / Camera / GPS / BT / fingerprint | Not started |
+| Cellular | **Automatic startup failed after flashing, verified 2026-10-28**: `qmxd` is running/ready, but `ril-daemon` restarts, baseband is empty and SIM is `NOT_READY`. The shared native-launcher fix for KitKat init's duplicate library-path environment awaits automatic-start verification. Earlier **manual** QCRIL/QMUX testing read `AT20-0506_2249_2f010e6`, entered `Radio On` and received VOICE/DMS/NAS/UIM replies, but both UIM slots returned `card_state=2`, `card_error=3`, no apps. SIM detection, registration, calls, SMS and mobile data remain open. |
+| Camera / GPS / BT / fingerprint | Not started |
+
+### Cellular control plane, 2026-10-28
+
+- **Match the IDL objects to QCRIL.** `qmi_client_init` returned `-47`
+  before any service allocation because the VOICE getter returned NULL.
+  This RIL requests VOICE `(2,53,6)`, DMS `(1,39,6)` and NAS `(1,113,6)`;
+  the earlier cancro V5 `libqmiservices.so` only accepted VOICE `(2,42,6)`
+  and DMS `(1,36,6)`. The matching `coresysroot/system/vendor/lib` library
+  has SHA256 `5c3bc57737222f4fde45686e88e7aeddb6edd3575342e3573209031f3c3c2611`.
+  Both files are 80148 bytes, so size is not a compatibility check.
+- **QMUX is a socket protocol, not the rmnet interface.** The logical
+  connection name `rmnet0` does not bypass the QMUX socket. `qmxd` bridges
+  the 32-bit client to AF_MSM_IPC (family 27), resolving each modem-node
+  service with `IPC_ROUTER_IOCTL_LOOKUP_SERVER`; router ports change across
+  boots. Missing services must fail allocation, not receive a fake client
+  routed to port zero.
+- **Keep the wire offsets exact.** Each frame is a 4-byte total length,
+  4-byte link id, 32-byte header, then payload. Header offsets are type 0,
+  link 4, full 32-bit transaction 8, system error 12, QMI error 16,
+  connection 20, service 24, client byte 28 and modem-to-client flag
+  `0x80` at byte 29. Allocation carries the service as a payload u32;
+  release carries the client at payload byte 4. QMI payloads have their
+  own 7-byte header and must match its TLV length. Host ASan/UBSan tests
+  cover transaction `0x108`, owner isolation, release and malformed input;
+  real VOICE/DMS/NAS/UIM traffic and baseband query succeeded on-device.
+- **Do not equate Radio On with working cellular.** The manual test used
+  files under `/data/local/tmp/rilp`, not an independently bootable image.
+  Both slots returned UIM errors: `card_state=2` means ERROR, and
+  `card_error=3` is `QMI_UIM_CARD_ERROR_NO_ATR_RECEIVED`, not a definitive
+  indication that no card is inserted (see the
+  [libqmi enum definitions](https://sources.debian.org/data/main/libq/libqmi/1.32.2-1/src/libqmi-glib/qmi-enums-uim.h)).
+  Slot 0 power-up received a successful QMI response, but no working SIM
+  application followed; slot mapping, electrical state and modem setup
+  remain unproven explanations. Optional VT/presence services were absent,
+  QCRIL could not open its database (`14`), and no rmnet data interface was
+  present. No calls, SMS or data session have been verified. MIUI V5 was
+  not changed. The phone was returned to recovery after log capture.
+- **Capture logs without Android logger.** The kernel has no logger driver;
+  creating `/dev/log` nodes still gives `ENODEV`. A temporary log shim sent
+  `__android_log_*` to stderr with `persist.radio.adb_log_on=1`. Manual adb
+  launches need `trap '' HUP` and all three standard streams redirected;
+  KitKat has no `env` utility, so use shell `export`. Raw QMI/RIL logs may
+  contain subscriber/device identifiers and must stay outside git.
+- **One baseband implementation for sagit and chiron.** Both AOSP products
+  inherit `vendor/xiaomi/sagit/ril/ril.mk`. The shared
+  `init.msm8998.rc` imports `init.msm8998.ril.rc`, which starts `qmxd`
+  and starts QCRIL only after the QMUX listener publishes readiness.
+  The private library path `/system/vendor/msm8998-ril/lib` avoids
+  replacing AOSP's global `libril.so` or the WiFi vendor closure. Input
+  files live in `vendor/xiaomi/sagit-ril/{bin,lib}`, outside the synced
+  device tree. The staging script and build both verify the exact 23-file
+  SHA256 manifest; the tested `libqmi_client_qmux.so` includes the earlier
+  open-connection/is-active patches and is not an unmodified donor blob.
+  No proprietary files or device logs are stored in this repository.
+  The old shared `init.rc` commented only the `ril-daemon` service header,
+  leaving its socket/user/group options attached to `debuggerd`; remove
+  that whole stale block so debuggerd cannot recreate the RIL sockets.
+- **Check permissions inside the image, not just the staging tree.**
+  The first integrated image had an executable `rild` in the build tree,
+  but `debugfs stat` on the expanded system image showed mode `0644` at
+  `/vendor/msm8998-ril/bin/rild`: KitKat's filesystem configuration does
+  not recognize that nested bin directory. Install the same binary as
+  `/system/bin/rild-msm8998`, which receives executable permissions;
+  the private library directory stays unchanged. The recovery side-target
+  also reports `cannot stat '.../root/init.recovery.*.rc'` (ignored by
+  make); only boot/system are being validated, not the generated recovery.
+- **Integration is not another hardware result.** The in-tree daemon has
+  bounded nonblocking output queues, 128 service-client slots (the manual
+  WDS initialization exhausted 32), radio-only socket access and opt-in
+  packet dumps (`-v`). Unsupported control operations, including version
+  list and data-format setup, return failure instead of fabricated service
+  versions or success. Modem sockets use nonblocking I/O; send failure or
+  a fatal receive error disconnects the owning QMUX client rather than
+  blocking every service or repeatedly reading an oversized queued packet.
+  Chiron's flashed image reached the listener but failed to keep RIL alive;
+  successful automatic startup remains unverified on both phones. Modem
+  restart recovery and rmnet setup are not complete.
+- **Shared build verified 2026-10-28.** Both `full_sagit-eng` and
+  `full_chiron-eng` build boot/system images. The packed boot ramdisks
+  contain the shared RIL import with only one RIL socket owner. Expanded
+  system images were checked with `debugfs`: all 23 blob hashes match,
+  `qmxd` and `rild-msm8998` have executable modes, and both products carry
+  byte-identical `qmxd`. Recursive runtime dependency checks cover 51 ELF
+  files per product. Host ASan/UBSan tests cover 128 clients, fragmented
+  frames, partial writes, EINTR/EAGAIN, queue overflow and transport errors.
+  These are build/host checks, not proof of automatic radio startup on a
+  freshly flashed phone; the user's subsequent chiron flash failed below.
+- **Verify the installed startup chain, not the build date.** Readback from
+  the user's flashed chiron on 2026-10-28 matched all 23 blob hashes, the
+  built `qmxd` and the shared init files; both executables were executable.
+  `qmxd=running`, `sys.msm8998.qmux.ready=1`, `ril-daemon=restarting`, empty
+  `gsm.version.baseband` and `gsm.sim.state=NOT_READY` showed that socket
+  readiness was not enough. The modem was online and EFS service running;
+  framework logs repeatedly reported `Couldn't find 'rild' socket`.
+  The old build-property date did not mean old radio files were flashed.
+  Capture was read-only, without manually starting RIL, and the phone was
+  returned to recovery. Init discards stderr, so no linker error was captured.
+- **KitKat init cannot override its global library path with setenv.** In
+  `system/core/init/init.c`, `add_environment()` appends a new entry rather
+  than replacing a matching key. The service's `setenv LD_LIBRARY_PATH`
+  followed the global `/vendor/lib:/system/lib` value from `init.environ.rc`,
+  leaving the private RIL library path ineffective. Static ELF checks confirm
+  that the old global dependency graph lacks `rild` and `RIL_setRilSocketName`,
+  both required by this executable; the private-first startup graph resolves
+  all its strong imports. This is not captured linker stderr or proof that
+  modem initialization will succeed.
+- **A shell launcher loses the hyphenated debug-socket variable.** A native
+  host build of this AOSP tree's mksh source reproduced loss of
+  `ANDROID_SOCKET_rild-debug` during the shell/export/exec chain. The library
+  path was corrected, but preserving a descriptor alone does not preserve
+  the environment name RIL uses to find it. That shell launcher was rejected
+  before flashing. Its host build required mksh's existing `MKSH_GCC55009`
+  compatibility flag for the compile-time signed-wrap assertion; no Android
+  shell source or build flags were changed.
+  Both products instead use `/system/bin/start-msm8998-ril`, built from shared
+  `ril/start-ril.c`: libc `setenv(..., 1)` replaces the library path and
+  `execv()` starts `rild-msm8998` without filtering other environment keys.
+  Init's `publish_socket()` clears `FD_CLOEXEC`, so both socket descriptors
+  survive. The host regression redirects only the exec target to a probe
+  and checks the path, unchanged PID and both socket names/descriptors across
+  a real exec. The native-launcher rebuild and packed-image checks are in
+  progress. Flash matching new boot and system together: the service command
+  is in boot, while the launcher is in system. Actual automatic startup
+  remains unverified on both phones; no new image was flashed by the agent
+  and no manual RIL launch was used.
+- **Instrumented so the next flash explains itself.** KitKat init sends a
+  service's stdout/stderr to `/dev/null` and records no exit status, and
+  debuggerd left no `rild` tombstone (all ten in the flashed readback were
+  `SIGPIPE` from our own capture pipes), so `rild` reaches `exit()` instead of
+  dying on a signal. The launcher now forks, redirects the child's
+  stdout/stderr to `/data/misc/radio/rild-console.log` and reports
+  `exit=<code>` or `signal=<n>` to kmsg under `RILL`; `qmxd` writes
+  listen/accept/alloc/disconnect lines under `QMXD` through the same kmsg
+  fallback. QCRIL only ever wrote its own diagnostics to stderr, so this is the
+  first build where they can be read.
+- **`--` keeps QCRIL's argv identical across ROMs.** `hardware/ril/rild/rild.c`
+  uses the library arguments that follow `--` and otherwise reads them from the
+  `rild.libargs` property. MIUI V5 still ships the 8974-era
+  `rild.libargs=-d /dev/smd0` while the AOSP build sets no such property, so the
+  launcher always passes `--` and both ROMs hand `RIL_Init` exactly one
+  argument.
+- **ASan itself faults on this WSL host, so it cannot gate the build.** With its
+  SIGSEGV handler enabled, a failing run printed nothing but
+  `AddressSanitizer:DEADLYSIGNAL` in a loop -- 857 MB before `timeout` killed it,
+  16 GB once before. Measured over repeated runs of both regressions: 20/20 clean
+  with `-fsanitize=undefined`, 12/12 clean with no sanitizer at all, but roughly
+  one in three ASan runs dies (139) *before its first line of output*, the same
+  binary that passes the other two times. `ASAN_OPTIONS=handle_segv=0` exposes
+  that as a plain early SIGSEGV, so the handler -- not the launcher and not a
+  self-`execv` probe, which an earlier version of this note blamed -- is the
+  faulting code. `ril/test.sh` now gates on UBSan and keeps ASan behind `ASAN=1`;
+  the launcher regression asserts inside its forked child regardless, because
+  that is where the inherited descriptors and environment actually are.
 
 ### Boot logo hang, fixed 2026-10-25
 
@@ -87,11 +241,22 @@ that one file into the installed system was enough to boot.
 
 ## Building and flashing
 
+Stage the matched RIL once, then sync both the shared and board trees:
+
 ```
-scripts/sync-device-tree.sh chiron
+python3 devices/sagit/kitkat/ril/stage-ril.py <tested-flat-ril-directory> /home/juezhi/aosp-kitkat
+AOSP_DIR=/home/juezhi/aosp-kitkat scripts/sync-device-tree.sh sagit
+AOSP_DIR=/home/juezhi/aosp-kitkat scripts/sync-device-tree.sh chiron
 ```
 
-then, in the KitKat build container (`/srv/aosp-kitkat`):
+The flat RIL directory must contain the 23 files identified by
+`devices/sagit/kitkat/ril/blobs.sha256`; it is not a stock msm8998 vendor
+folder. Do not substitute a same-sized `libqmiservices.so` or an unpatched
+QMUX client. The build refuses missing or mismatched files rather than
+silently producing a nonfunctional radio. Run the bridge's host regression
+with `bash devices/sagit/kitkat/ril/test.sh` (C compiler + ASan/UBSan).
+
+Then, in the KitKat build container (`/srv/aosp-kitkat`):
 
 ```
 . build/envsetup.sh && lunch full_chiron-eng && make -j8 bootimage systemimage
@@ -124,6 +289,7 @@ here is committed.
 | Android 15 vendor closure + `fbpresentd` | `vendor/xiaomi/sagit-hyb/root/`, `vendor/xiaomi/sagit-bin/bin/` | reused from the sagit port (`tools/libhyb/`) |
 | WLAN vendor daemons + 64-bit libraries | `vendor/xiaomi/sagit-wifi/{bin,lib64,system-lib64}/` | `devices/chiron/kitkat/wifi-tools/stage-wifi-vnd.sh` against a phone on stock firmware (see [wifi-progress.md §10](wifi-progress.md)) |
 | `wlq` / `rfssrv2` / `sm-vndk` | `vendor/xiaomi/sagit-bin/bin/` | `devices/chiron/kitkat/wifi-tools/build-wf-bins.sh` |
+| Shared 32-bit QCRIL closure | `vendor/xiaomi/sagit-ril/{bin,lib}/` | `devices/sagit/kitkat/ril/stage-ril.py` from the exact tested files; shared with sagit, version/hash-checked, not committed |
 | `system.prop`, `fstab`, `init*`, `ueventd`, mixer, WLAN ini | in tree (the ramdisk files are `vendor/xiaomi/sagit/*msm8998*`; the mixer/WLAN ini are chiron's) | already captured from the stock dump |
 
 ## Documentation and links

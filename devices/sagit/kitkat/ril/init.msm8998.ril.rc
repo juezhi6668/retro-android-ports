@@ -1,0 +1,27 @@
+on post-fs-data
+    mkdir /data/misc/radio 0770 radio radio
+    chown radio radio /data/misc/radio
+    chmod 0770 /data/misc/radio
+    mkdir /dev/socket/qmux_radio 0770 root radio
+    setprop ro.baseband msm
+    setprop sys.msm8998.qmux.ready 0
+    start qmxd
+
+on property:sys.msm8998.qmux.ready=1
+    start ril-daemon
+
+service qmxd /system/bin/qmxd
+    class main
+    user root
+    group radio inet
+    disabled
+    onrestart setprop sys.msm8998.qmux.ready 0
+    onrestart stop ril-daemon
+
+service ril-daemon /system/bin/start-msm8998-ril
+    class main
+    socket rild stream 660 root radio
+    socket rild-debug stream 660 radio system
+    user root
+    group radio cache inet misc audio log
+    disabled

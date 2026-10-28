@@ -844,6 +844,19 @@ lessons:
 - vold/adbd/rild crash-loop triage from cooper applies: guard NULL
   uevent fields, split-pipe adbd diagnosis if pty misbehaves, comment out
   `ril-daemon` until an RIL lib exists for the SoC.
+- **Service `setenv` does not replace KitKat init's global environment.**
+  Source inspection during chiron's RIL startup failure (2026-10-28) found
+  that `system/core/init/init.c:add_environment()` appends duplicate keys;
+  `bionic/linker/linker_environ.cpp:linker_env_get()` returns the first match.
+  A private `LD_LIBRARY_PATH` in a service therefore loses to the earlier
+  global value from `init.environ.rc`. Use an init-managed native launcher
+  with libc `setenv(..., 1)` then `execv()`. A host test using this tree's mksh
+  source showed that a shell/export/exec workaround drops the invalid shell
+  identifier `ANDROID_SOCKET_rild-debug`, even if the descriptor survives.
+  Init clears `FD_CLOEXEC` on published sockets; a native launcher preserves
+  both the descriptors and all environment names. The shared sagit/chiron
+  launcher is implemented; successful automatic RIL startup is not yet verified.
+  See [chiron's control-plane notes](../../devices/chiron/README.md#cellular-control-plane-2026-10-28).
 - **healthd's power-supply type table is the KitKat list, the charger speaks msm-4.4**
   (sagit/chiron V5 + chiron AOSP, 2026-10-28). `readPowerSupplyType()` only maps
   `Unknown/Battery/UPS/Mains/USB/USB_DCP/USB_CDP/USB_ACA/Wireless`, but an msm-4.4

@@ -28,6 +28,8 @@ PRODUCT_MODEL := MI MIX 2
 PRODUCT_BRAND := Xiaomi
 PRODUCT_MANUFACTURER := Xiaomi
 
+$(call inherit-product, vendor/xiaomi/sagit/ril/ril.mk)
+
 PRODUCT_COPY_FILES += \
     vendor/xiaomi/chiron/system.prop:system/build.prop \
     vendor/xiaomi/sagit/fstab.msm8998:root/fstab.msm8998 \

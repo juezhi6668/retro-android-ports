@@ -13,6 +13,7 @@
 # same at the fs stage, so a boot survives either path winning.
 
 import /init.msm8998.usb.rc
+import /init.msm8998.ril.rc
 
 on init
     # PERMISSIVE SELinux for bringup: KitKat policy mismatches the 4.4 kernel

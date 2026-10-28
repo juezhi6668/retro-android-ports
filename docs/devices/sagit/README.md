@@ -55,7 +55,8 @@ also moves the vibrator off the Mi 3 Immersion engine). Write-up:
 [chiron wifi-progress.md](../chiron/wifi-progress.md) §12 |
 | Storage | internal emulated only (no microSD); no `/vendor` partition on the stock layout — the hybrid root lives at `/system/a15` |
 | Lights | `lcd-backlight` (no `/sys/class/backlight`) + `wled`, notification `white` LED with `blink` — all measured |
-| Cellular / Camera / GPS / BT / fingerprint | Not started |
+| Cellular | Shared msm8998 QMUX bridge and matched 32-bit QCRIL stack with chiron (`devices/sagit/kitkat/ril/`); both AOSP products use the same source, staging and init configuration. Baseband query + Radio On were verified on **chiron only**, manually launched 2026-10-28; the subsequent flashed chiron image restarts RIL. Both products now use a native launcher to replace KitKat init's ineffective library-path `setenv` without losing the hyphenated debug-socket variable in mksh; automatic startup remains unverified. SIM errors and all cellular services remain open. Not hardware-verified on sagit. See [chiron control-plane notes](../chiron/README.md#cellular-control-plane-2026-10-28). |
+| Camera / GPS / BT / fingerprint | Not started |
 
 Open work and the Mi-6-vs-maple deltas are tracked in
 [quirks.md](quirks.md).
@@ -92,6 +93,7 @@ are gitignored). Paths are relative to the AOSP root (`/home/juezhi/aosp-kitkat`
 | 64-bit `fbpresentd` | `vendor/xiaomi/sagit-bin/bin/fbpresentd` | `tools/libhyb/build-native.sh /home/juezhi/aosp-kitkat xiaomi/sagit` (needs the NDK path it expects) |
 | WLAN static binaries (`wlq`, `rfssrv2`, `sm-vndk`) | `vendor/xiaomi/sagit-bin/bin/` | `devices/chiron/kitkat/wifi-tools/build-wf-bins.sh` (linaro aarch64 `-static`; `sm-vndk` needs one AOSP build first because it patches `out/.../system/bin/servicemanager`) |
 | 64-bit Qualcomm WLAN daemons + their libraries | `vendor/xiaomi/sagit-wifi/{bin,lib64,system-lib64}/` | `devices/chiron/kitkat/wifi-tools/stage-wifi-vnd.sh`, run from Windows against a sagit/chiron phone still on its stock firmware (`adb pull` only; a KitKat phone cannot bootstrap this) |
+| Shared 32-bit QCRIL closure | `vendor/xiaomi/sagit-ril/{bin,lib}/` | `python3 devices/sagit/kitkat/ril/stage-ril.py <tested-flat-ril-directory> <aosp-root>`; verifies every blob against `ril/blobs.sha256`, including the matched service descriptors and patched QMUX client. Required by both AOSP products. |
 | Modem / ADSP / WLAN / BT firmware | `vendor/xiaomi/sagit-fw/{modem,adsp,wlan,bt}/` | copy from the device's `modem`+`bluetooth` partitions, `persist`, and `/vendor/firmware` on a rooted Lineage 22.1 install (the exact file names `init.msm8998.rc`/`ueventd.msm8998.rc` need are listed there) |
 | `pdserve`/PDR mapping (if the ROM's `pdc` data differs) | `vendor/xiaomi/sagit-fw/` or the in-tree `pdserve` service args | compare `vendor/etc/pd-mappings` from the ROM; maple's mapping is in `devices/maple/kitkat/` |
 | Stock-facts dump | `dumps/sagit-stock-<date>/` | `scripts/dump-sagit-stock.sh --su` (`--root` only if adbd allows `adb root`; this ROM is a production build and needs the `su` path) |

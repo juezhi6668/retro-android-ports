@@ -373,6 +373,44 @@ image is untouched — flash `boot` alone. Healthd runs `service healthd /sbin/h
 the "KitKat userspace on a 4.4 kernel" bullet in
 [porting-notes/kitkat.md](../../advanced/porting-notes/kitkat.md).
 
+**V5 with the shared msm8998 RIL (2026-10-28, not yet flashed).** The baseband stack is
+the same one the AOSP products ship (see the chiron README's "Cellular control plane"
+section); `inject-v5-system.sh` installs `/system/bin/{qmxd,start-msm8998-ril}` byte-identical
+to `out/target/product/sagit/system/bin`, `/system/bin/rild-msm8998` and the 22 hashed blobs
+under `/system/vendor/msm8998-ril/lib`, and `repack-v5-boot.sh` ships `init.msm8998.ril.rc`
+in the ramdisk, imported right after `init.msm8998.usb.rc`. Four things are V5-specific:
+
+- **MIUI's dead `ril-daemon` stanza still owns the RIL sockets.** A previous pass commented
+  out the `service` line but left its indented body, so init created `/dev/socket/rild` for a
+  service that never ran. The repack now deletes the whole block and asserts no other ramdisk
+  file mentions `ril-daemon`; `init.msm8998.ril.rc` is the single owner (AOSP verified the
+  same way).
+- **`rild.libargs=-d /dev/smd0`** is still in V5's `build.prop` (8974-era), while the AOSP
+  build sets no such property. Both would hand QCRIL different argv, because `rild` reads that
+  property unless `--` appears. The launcher always passes `--`, so both ROMs give
+  `RIL_Init()` one argument.
+- **MIUI's own `/system/bin/rild` and `/system/lib/libril.so` stay**: nothing starts them, the
+  launcher execs `rild-msm8998` with an explicit `-l`, and the private-first
+  `LD_LIBRARY_PATH` outranks V5's stale QC libraries in `/system/vendor/lib`.
+- **`ro.baseband`** is absent from V5, so the rc's `setprop ro.baseband msm` takes effect
+  rather than colliding with a stock value.
+
+Repacking onto a boot image this script itself wrote hit its own guard: such an image carries
+the ramdisk's page padding (940 zero bytes here), and the "nothing after the ramdisk" assert
+read that as a dropped payload. It now requires the tail to be *zero* bytes, so a stock boot
+with a real appended stage still fails loudly.
+
+New pair: `boot-mi5-ril.img` md5 `2dc3d19238496be5d10f5166641838a6` (ramdisk 343178) +
+`system_miui5_ril.img` md5 `4fb66b4bc1bdc43be557b1a7096f5572`, packaged in
+`C:\download\chiron\sagit-v5-ril-20261028\`. `verify-v5-ril.py` checks the system tree (binary
+bytes, 22 blob hashes, no shell launcher, MIUI `rild` still present) and the packed boot
+(rc contents, single socket owner, one import, and that `wf-*`, `checkpath`, `miui-shell`,
+`pdserve` and the supplicant `-O` arguments survived). **Static checks only, and the AOSP
+stack itself is still unverified on the phone: rild dies inside its first `qmi_init` there
+too, which is why the launcher now forks, redirects rild's stdout/stderr to
+`/data/misc/radio/rild-console.log` and reports `exit=`/`signal=` to kmsg.** Flash boot and
+system together, then read `console-ramlog` plus that log before touching the SIM state.
+
 ## MIUI V7 4.4.4 (`cancro`) pack deltas
 
 The side port in [miui-v7-kitkat.md](miui-v7-kitkat.md) is a plain
@@ -460,8 +498,11 @@ bootclasspath changes are needed. What the packer has to know:
 - **WiFi/modem PD stability.** icnss needs SERVREG_LOC (`pdserve`, in-tree)
   and the modem root PD to stay up for `wlan_pd`/WLFW; on maple it crashes
   every ~41 s. Expect the same until the keepalive path is settled.
-- **No RIL.** No KitKat-era Qualcomm RIL for this platform; cellular stays
-  off (same posture as maple/cooper).
+- **Cellular is not proven.** The "no KitKat-era Qualcomm RIL for this platform"
+  posture is gone — a stock msm8998 RIL closure now ships on both ROMs behind the
+  in-tree `qmxd` QMUX bridge — but it has never come up: on AOSP rild dies inside
+  its first `qmi_init` (no SIM, no registration). See the V5 RIL paragraph above
+  and the chiron README's "Cellular control plane, 2026-10-28" section.
 - **Camera / GPS / BT / fingerprint.** Proprietary HALs, not started.
 - **BT SCO audio.** The `qcom,wcn-btfm` property is stripped by
   `patch-sagit-dtb.py` so the card registers; SCO itself stays dead
