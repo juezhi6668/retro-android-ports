@@ -55,7 +55,7 @@
 第 15 节是同一套做法往**通知呼吸灯**上搬：V5 只带 cancro 的 `lights.msm8974.so`，驱动的是这个
 DTS 不注册的 red/green/blue 节点，而真实节点 `/sys/class/leds/white` 的属性是 `root:root 0644`，
 LightsService（uid system）每笔写都 EACCES —— 两半分别由 `inject-v5-system.sh`（同一份 AOSP
-`lights.sagit.so` 装成两个查找名）和 `repack-v5-boot.sh`（把 chown 段单独切进 V5 ramdisk）固化。
+`lights.msm8998.so` 装成两个查找名）和 `repack-v5-boot.sh`（把 chown 段单独切进 V5 ramdisk）固化。
 
 
 
@@ -70,7 +70,7 @@ LightsService（uid system）每笔写都 EACCES —— 两半分别由 `inject-
 早先的 `wf-block-append.rc`、`build-wlq.sh`、`bootlog-wifi-hook.sh`、`rfssrv.c` 已删：
 服务段进了两份 init rc，IRSC 钩子被 ramdisk 里的 wf-setup.sh 取代（早 ~23s）。
 
-- `init.sagit.rc` 与 `init.chiron.rc` 追加同一段（已 diff 校验一致）：
+- `init.msm8998.rc`（两个设备共用同一份）追加同一段：
   on post-fs-data: start wf-setup / start wf-efs / start wf-wifi-gate；服务 wf-setup
   (oneshot,/system/bin/sh /sbin/wf-setup.sh)、wf-efs(respawn,/sbin/wf-efs-keeper.sh)、
   wf-sm(sm-vndk)、wf-wifi-gate(oneshot,/sbin/wf-wifi-gate.sh)。四个服务都带 `disabled`，
@@ -453,7 +453,7 @@ fsc=sdf1、fsg=sde34、persist=sda14，和 sagit 原厂 dump
 
 sagit 刷本 port 的干净 AOSP 镜像后 rec 读不到 /sdcard，改跑能用的 MIUI V5
 （cancro 4.4.2，`androidboot.hardware=sagit`，ramdisk 就是本仓库那份
-`init.sagit.rc` + MIUI 自己的行）。V5 的镜像是成品 ext4 / 成品 boot.img，没有
+`init.msm8998.rc` 装进 V5 ramdisk 后叫 `init.sagit.rc` + MIUI 自己的行）。V5 的镜像是成品 ext4 / 成品 boot.img，没有
 构建可走，所以第 10 节那套"由 mk 安装"的东西全部改成手工安装。脚本在
 `/home/juezhi/mi5-wifi/`（和 `miui5-chiron-pack.sh` 一样放仓库外，仓库只跟 AOSP 设备树）：
 
@@ -694,14 +694,14 @@ sagit 这边缺的只是"预构建 ROM 也要吃到这两半"。
 
 两半各自落在打包脚本里：
 
-- **system 半边**（`inject-v5-system.sh`）：把 AOSP 造好的 `lights.sagit.so` 同时装成
+- **system 半边**（`inject-v5-system.sh`）：把 AOSP 造好的 `lights.msm8998.so` 同时装成
   **两个名字** —— `lights.sagit.so`（`ro.hardware=sagit` 先解析到的）和 `lights.msm8974.so`
   （V5 里本来就在、而且内容是错的那一份）。只加新名字不换旧名字，HAL 管理器仍可能拿到
   cancro 的。装之前两道 FATAL：文件存在，且 `grep -a 'leds/white/trigger'` 命中（防止装到
   `0ec68b5` 之前的旧 build）；`verify-v5-wifi.sh` 再断言两个文件 md5 相同。
   chiron 的 `miui5-chiron-pack.sh` §1g 一直是这个做法（`lights.chiron.so` +
   `lights.msm8974.so`），sagit 只是把同一对写死成自己的两个名字。
-- **boot 半边**（`repack-v5-boot.sh`）：chown 那一段在 `init.sagit.rc` 里位于
+- **boot 半边**（`repack-v5-boot.sh`）：chown 那一段在 `init.msm8998.rc` 里位于
   `# ---- WLAN bring-up stack` 标记**之前**，而该脚本只把标记到 EOF 追加进 V5 ramdisk，
   所以必须单独切：`sed -n '/^# LightsService writes these/,/leds\/wled\/brightness/p'`。
   幂等（V5 rc 里已经有 `leds/white/trigger` 就跳过），切不出来就 FATAL 让打包失败。

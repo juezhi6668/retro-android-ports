@@ -1,15 +1,17 @@
-# fstab.sagit — KitKat (GPT/ext4, UFS)
+# fstab.msm8998 — KitKat (GPT/ext4, UFS) for the msm8998 boards
+# (Mi 6 sagit / Mi MIX 2 chiron share the partition names, so one fstab;
+# vold reads /fstab.${ro.hardware} and androidboot.hardware=msm8998).
 # Block paths: ueventd on the 4.4 kernel creates them under
 # /dev/block/platform/soc/by-name/* (maple-verified for msm8998). KitKat has
 # no /dev/block/bootdevice/ — that symlink is made by newer init.rc.
 # Measured on the phone 2026-10-24: the stock Android 16 ROM exposes
 # /dev/block/by-name, /dev/block/bootdevice/by-name AND
 # /dev/block/platform/soc/1da4000.ufshc/by-name (boot=sde40, system=sda18,
-# userdata=sda17, cache=sda16, persist=sda14). KitKat's own ueventd is what
+# userdata=sda17, cache=sda16, persist=sda14 on the Mi 6). KitKat's own ueventd
 # decides the final layout; the platform/soc row below is maple-verified and
-# init.sagit.rc's ufshc-level stanza covers the other one.
+# init.msm8998.rc's ufshc-level stanza covers the other one.
 /dev/block/platform/soc/by-name/system   /system  ext4  ro                                                              wait
 /dev/block/platform/soc/by-name/userdata /data    ext4  nosuid,nodev,noatime,nodiratime,nobarrier,noauto_da_alloc        wait,check,encryptable=footer
 /dev/block/platform/soc/by-name/cache    /cache   ext4  nosuid,nodev,noatime,nodiratime,nobarrier                        wait,check
 /dev/block/platform/soc/by-name/persist  /persist ext4  nosuid,nodev,barrier=1                                          wait,notrim
-# No sdcard row: the Mi 6 has no microSD slot (maple's row managed sdcard1).
+# No sdcard row: neither board has a microSD slot (maple's row managed sdcard1).

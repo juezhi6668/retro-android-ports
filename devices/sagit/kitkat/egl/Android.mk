@@ -8,7 +8,7 @@ LOCAL_MODULE_PATH := $(TARGET_OUT_SHARED_LIBRARIES)/egl
 LOCAL_MODULE_TAGS := optional
 LOCAL_SRC_FILES := egl_shim.c
 LOCAL_CFLAGS := -std=gnu99 -O2 -Wall -Wno-unused-parameter -DEGL_EGLEXT_PROTOTYPES
-LOCAL_CFLAGS += -DGRALLOC_MODULE='"/system/lib/hw/gralloc.$(TARGET_DEVICE).so"'
+LOCAL_CFLAGS += -DGRALLOC_MODULE='"/system/lib/hw/gralloc.msm8998.so"'
 LOCAL_SHARED_LIBRARIES := libhyb libcutils liblog libdl
 include $(BUILD_SHARED_LIBRARY)
 

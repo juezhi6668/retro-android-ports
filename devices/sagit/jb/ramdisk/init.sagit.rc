@@ -6,7 +6,7 @@
 # already boot on this phone), only the device hook and the boot classpath
 # are swapped for the Jelly Bean userland.
 #
-# Differences from devices/sagit/kitkat/init.sagit.rc:
+# Differences from devices/sagit/kitkat/init.msm8998.rc:
 #   - no fbpresentd/pdserve/rtc-restore/bootlog: those binaries exist only in
 #     the KitKat system image
 #   - no modem_hold: the MIUI tree ships brcm wifi firmware only, no PIL blobs

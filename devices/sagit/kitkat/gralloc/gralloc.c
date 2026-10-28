@@ -7,7 +7,7 @@
  * pointer, then closes and destroys it (delete) on the last release. So it gets a clone
  * (duplicated descriptors); the original stays with KitKat (GraphicBuffer closes it itself).
  * sagit_gralloc_import() hands this QTI handle to the EGL shim (Adreno driver). */
-#define LOG_TAG "gralloc.sagit"
+#define LOG_TAG "gralloc.msm8998"
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/fb.h>
@@ -711,7 +711,7 @@ struct gralloc_module_t HAL_MODULE_INFO_SYM = {
         .module_api_version = GRALLOC_MODULE_API_VERSION_0_2,
         .hal_api_version = HARDWARE_HAL_API_VERSION,
         .id = GRALLOC_HARDWARE_MODULE_ID,
-        .name = "sagit: Lineage 22.1 QTI gralloc1 through libhyb",
+        .name = "msm8998: Lineage 22.1 QTI gralloc1 through libhyb",
         .author = "retro-android-ports",
         .methods = &gr_methods,
     },

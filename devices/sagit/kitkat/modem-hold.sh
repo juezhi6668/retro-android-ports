@@ -1,6 +1,6 @@
 #!/system/bin/sh
 # modem-hold.sh — boot the MSM8998 modem and hold it open (TEST 39).
-# See the modem_hold service in init.sagit.rc and TEST 39 in
+# See the modem_hold service in init.msm8998.rc and TEST 39 in
 # docs/devices/sagit/quirks.md.
 #
 # Opening /dev/subsys_modem runs subsystem_get_with_fwname("modem"): the PIL

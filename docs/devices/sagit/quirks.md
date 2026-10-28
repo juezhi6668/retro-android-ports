@@ -36,9 +36,9 @@ missing hardware.
 
 | what | value | where it lands |
 | --- | --- | --- |
-| by-name | `/dev/block/by-name`, `/dev/block/bootdevice/by-name` and `/dev/block/platform/soc/1da4000.ufshc/by-name` all resolve | `fstab.sagit`, init stanzas |
+| by-name | `/dev/block/by-name`, `/dev/block/bootdevice/by-name` and `/dev/block/platform/soc/1da4000.ufshc/by-name` all resolve | `fstab.msm8998`, init stanzas |
 | partitions | boot `sde40` 64 MiB, recovery `sda15` 64 MiB, system `sda18` 9 GiB, cache `sda16` 256 MiB, persist `sda14` 64 MiB, modem `sde41` 192 MiB, misc `sda9` 4 MiB | `BoardConfig.mk` |
-| cmdline | boot.img carries `androidboot.hardware=qcom`; bootloader appends `mdss_mdp.panel=1:dsi:0:qcom,mdss_dsi_jdi_fhd_r63452_cmd:config2:1:none:cfg:single_dsi`, `androidboot.serialno`, `veritymode` etc. — it does **not** append `androidboot.hardware`, so our `hardware=sagit` survives | `BoardConfig.mk` |
+| cmdline | boot.img carries `androidboot.hardware=qcom`; bootloader appends `mdss_mdp.panel=1:dsi:0:qcom,mdss_dsi_jdi_fhd_r63452_cmd:config2:1:none:cfg:single_dsi`, `androidboot.serialno`, `veritymode` etc. — it does **not** append `androidboot.hardware`, so our `hardware=msm8998` survives | `BoardConfig.mk` |
 | panel | `jdi fhd cmd incell dsi panel`, fb0 1080×1920 @60, virtual 1080×3840, density 440 | Panel DTB |
 | touch | input name **`synaptics_dsx`**, ABS_X 0..1079 / ABS_Y 0..1919, `INPUT_PROP_DIRECT` | `synaptics_dsx.idc` |
 | keys | `gpio-keys` = volume up/down + power (KEY_0x73/0x74 are on `qpnp_pon`) | `gpio-keys.kl` |
@@ -46,7 +46,7 @@ missing hardware.
 | LEDs | `white` (brightness/blink/max_brightness), `wled`, `button-backlight`, `vibrator` (pmi8998 haptics) | `lights.c` (already) |
 | hw_platform | **`SAGIT`** — and it is a red herring: the vendor `libacdbloader.so` hardcodes **`Forte`** (`strings … \| grep -E '^Forte$'`), and the ROM ships `vendor/etc/acdbdata/Forte/` | `full_sagit.mk`, `stage.py --acdb-name=Forte` |
 | sound card | `msm8998-tasha-snd-card` (only card 0); speaker is the TFA9888 amp on **QUAT_MI2S (I2S)**, WCD9335 only serves the headphone jack | `audio_hw.c` (already) |
-| subsys | `ipa_fws venus spss a540_zap adsp slpi modem` — **no `wcnss`/`wlan_pd` entry** | `init.sagit.rc` resolves by name, so indices are fine |
+| subsys | `ipa_fws venus spss a540_zap adsp slpi modem` — **no `wcnss`/`wlan_pd` entry** | `init.msm8998.rc` resolves by name, so indices are fine |
 | UDC | `a800000.dwc3` (single entry) | `usbudc.sh` → gadget |
 | RTC | `rtc0` = `qpnp_rtc`, `/sys/class/rtc/rtc0/since_epoch` present, no `/dev/alarm` | `rtc_restore.c` (already) |
 | input devices | `event0 qpnp_pon`, `event1 synaptics_dsx`, `event2 uinput-goodix` (fingerprint), `event3 gpio-keys`, `event4/5 tasha jacks` | — |
@@ -147,12 +147,12 @@ are the places where a 4.1.2 userland cannot follow a 4.4 ramdisk.
   and hardcodes its FUSE mount point `/storage/sdcard0` (both verified
   from the binary 2026-10-24). KitKat's
   `sdcard -u 1023 -g 1023 -l /data/media /mnt/shell/emulated` would print
-  usage and exit, so `init.sagit.rc` uses `sdcard /data/media 1023 1023`.
+  usage and exit, so `init.msm8998.rc` uses `sdcard /data/media 1023 1023`.
 - **JB `vold` reads `/system/etc/vold.fstab`, not `/fstab.<hardware>`.**
   The ROM ships `dev_mount sdcard /storage/sdcard0 auto
   /devices/platform/msm_sdcc.3/mmc_host` — an MSM8660 SD controller that
   does not exist here, so that mount simply fails; the ramdisk
-  `fstab.sagit` is inert on 4.1.
+  `fstab.msm8998` is inert on 4.1.
 - **The OTA ships only `system/` and `data/`** — no boot, no recovery —
   so the boot image has to be assembled (`scripts/build-sagit-jb-boot.py`).
   Its zip entries are FAT (`-rw----`, no symlinks): extracting on Windows
@@ -279,14 +279,14 @@ What is specific to running a *prebuilt* ROM here:
   `/sys/class/leds/white` (`max_brightness` 255, measured in recovery). (2) The LED class
   attributes are created `root:root 0644`, while LightsService runs in system_server (uid
   system), so every HAL write returns EACCES; MIUI's own `init.rc` only chowns the three
-  colour-named nodes that do not exist. Fix = this port's AOSP `lights.sagit.so`
-  (`devices/sagit/kitkat/lights/lights.c`, repo commit `0ec68b5`) installed under **both**
-  lookup names — `lights.sagit.so` (what `ro.hardware=sagit` resolves first) and
-  `lights.msm8974.so` (the cancro fallback key, i.e. the file V5 actually loads) — plus the
-  `on boot` chown stanza sliced into the V5 ramdisk. That stanza sits *before* the
-  `# ---- WLAN bring-up stack` marker that `repack-v5-boot.sh` appends from, so the repack has
-  to `sed`-slice it out of `init.sagit.rc` separately; it stays its own stanza because a chown
-  onto a missing node aborts the rest of the action.
+  colour-named nodes that do not exist. Fix = this port's AOSP `lights.msm8998.so`
+  (`devices/sagit/kitkat/lights/lights.c`, repo commit `0ec68b5`) installed into the V5 image
+  under **both** lookup names — `lights.sagit.so` (what that ROM's `ro.hardware=sagit`
+  resolves first) and `lights.msm8974.so` (the cancro fallback key, i.e. the file V5 actually
+  loads) — plus the `on boot` chown stanza sliced into the V5 ramdisk. That stanza sits *before*
+  the `# ---- WLAN bring-up stack` marker that `repack-v5-boot.sh` appends from, so the repack
+  has to `sed`-slice it out of `init.msm8998.rc` separately; it stays its own stanza because a
+  chown onto a missing node aborts the rest of the action.
 - **`/sys/class/leds/white/blink` is a 1/0 flag, not an on/off millisecond pair**, and it is
   write-only here (`cat` returns I/O error, which is normal — judge blink by the LED or the HAL
   log). Write `brightness` *before* `blink 1`: `qpnp_rgb_set()` clears `pwm_cfg->blinking`, so a

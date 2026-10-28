@@ -1,4 +1,4 @@
-/* Protocol between gralloc.sagit (SurfaceFlinger, 32-bit) and fbpresentd (64-bit).
+/* Protocol between gralloc.msm8998 (SurfaceFlinger, 32-bit) and fbpresentd (64-bit).
  * Abstract SOCK_SEQPACKET socket "fbpresent". The client sends one struct fbp_req per frame,
  * with the buffer descriptor (SCM_RIGHTS) the first time it presents that id; the daemon answers
  * with an int32 (0 or -errno) once the commit is done. */

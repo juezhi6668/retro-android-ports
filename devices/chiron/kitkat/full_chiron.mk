@@ -30,12 +30,12 @@ PRODUCT_MANUFACTURER := Xiaomi
 
 PRODUCT_COPY_FILES += \
     vendor/xiaomi/chiron/system.prop:system/build.prop \
-    vendor/xiaomi/chiron/fstab.chiron:root/fstab.chiron \
+    vendor/xiaomi/sagit/fstab.msm8998:root/fstab.msm8998 \
     vendor/xiaomi/sagit/init.rc:root/init.rc \
-    vendor/xiaomi/chiron/init.chiron.rc:root/init.chiron.rc \
-    vendor/xiaomi/chiron/init.chiron.usb.rc:root/init.chiron.usb.rc \
+    vendor/xiaomi/sagit/init.msm8998.rc:root/init.msm8998.rc \
+    vendor/xiaomi/sagit/init.msm8998.usb.rc:root/init.msm8998.usb.rc \
     vendor/xiaomi/sagit/usbudc.sh:root/sbin/usbudc.sh \
-    vendor/xiaomi/chiron/ueventd.chiron.rc:root/ueventd.chiron.rc \
+    vendor/xiaomi/sagit/ueventd.msm8998.rc:root/ueventd.msm8998.rc \
     vendor/xiaomi/sagit/autowinch.sh:root/sbin/autowinch.sh \
     vendor/xiaomi/sagit/wf-setup.sh:root/sbin/wf-setup.sh \
     vendor/xiaomi/sagit/wf-efs-keeper.sh:root/sbin/wf-efs-keeper.sh \
@@ -57,10 +57,10 @@ PRODUCT_COPY_FILES += \
     vendor/xiaomi/sagit/media/media_codecs.xml:system/etc/media_codecs.xml \
     frameworks/native/data/etc/android.hardware.wifi.xml:system/etc/permissions/android.hardware.wifi.xml
 
-# audio.primary.chiron (shared tinyalsa HAL, -DAMP_TAS2559) + sound recorder
-# jni (same CHARQUIRKS reason as sagit).
+# audio.primary.msm8998 (shared tinyalsa HAL, -DAMP_TAS2559 for this product)
+# + sound recorder jni (same CHARQUIRKS reason as sagit).
 PRODUCT_PACKAGES += \
-    audio.primary.$(PRODUCT_DEVICE) \
+    audio.primary.msm8998 \
     libsrec_jni
 
 # Firmware. adsp/modem are the same msm8998 blobs as sagit (same baseband,
@@ -181,7 +181,7 @@ PRODUCT_PACKAGES += \
     libEGL_adreno \
     libGLESv1_CM_adreno \
     libGLESv2_adreno \
-    gralloc.$(PRODUCT_DEVICE) \
+    gralloc.msm8998 \
     gralloc.default \
     libGLES_android \
     hybtest \
@@ -190,7 +190,7 @@ PRODUCT_PACKAGES += \
     audiorecord_test \
     rtc-restore \
     time-sync \
-    lights.$(PRODUCT_DEVICE) \
+    lights.msm8998 \
     pdserve
 
 # Android 15 vendor closure: same staged root at /system/a15 + a540 firmware.

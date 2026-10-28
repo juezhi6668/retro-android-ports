@@ -1,6 +1,6 @@
 /* acdbtest: drive the Lineage 22.1 (Android 15) ACDB loader through libhyb.
  *
- * This is the diagnostic for that path: the HAL (audio.primary.sagit) owns
+ * This is the diagnostic for that path: the HAL (audio.primary.msm8998) owns
  * calibration now, and this tool is how the loader, the acdbdata directory and
  * the fd lifetime were proven before wiring anything into mediaserver.
  * libacdbloader parses the ROM's *.acdb files (the Mi 6 ROM ships its own

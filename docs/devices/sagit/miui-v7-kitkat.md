@@ -107,14 +107,14 @@ with the [KitKat port's](README.md) libhyb display stack:
 - `/system/a15` ← `vendor/xiaomi/sagit-hyb/root` (35 files, 17 MiB,
   the whole hybrid vendor closure).
 - `lib/hw/gralloc.msm8974.so` **and** `gralloc.sagit.so` overwritten with
-  the gralloc shim — `hw_get_module` resolves the variant from cancro's
-  `ro.board.platform=msm8974` before it ever tries `.sagit`, so the shim
+  the AOSP `gralloc.msm8998.so` shim — `hw_get_module` resolves the variant from cancro's
+  `ro.board.platform=msm8974` before it ever tries `.msm8998`, so the shim
   must carry the cancro name.
 - `hwcomposer.msm8974.so` / `copybit.msm8974.so` / `memtrack.msm8974.so`
   removed (the port has none; SF falls back to the fbdev path), and
   `vendor/lib/egl/` deleted — the KitKat EGL loader scans both `lib/egl`
   and `vendor/lib/egl`, so the a330 drivers must not survive.
-- `bin/fbpresentd` installed (the KitKat ramdisk's `init.sagit.rc`
+- `bin/fbpresentd` installed (the KitKat ramdisk's `init.msm8998.rc`
   already runs the service; it was just missing here).
 - `lib/liblog.so` → the sagit build's patched liblog (falls back to
   `/dev/kmsg` when `/dev/log` is absent, i.e. this kernel without
@@ -177,7 +177,7 @@ None needed — use the **KitKat port's booting `boot.img` as-is**
 build's `BOOTCLASSPATH` lists (`core`, `core-libart`, `framework2`,
 `webviewchromium`, `okhttp`, `telephony-common`, `mms-common`, ...), and
 its `sdcard`/`vold` are KitKat binaries: `vold` reads the ramdisk's
-`fstab.sagit`, the ROM's `etc/vold.fstab` (`msm_sdcc.2` SD slot) is inert.
+`fstab.msm8998`, the ROM's `etc/vold.fstab` (`msm_sdcc.2` SD slot) is inert.
 Never flash the zip's `boot.img` or the `.mbn`/`NON-HLOS.bin` images.
 
 ## Flashing

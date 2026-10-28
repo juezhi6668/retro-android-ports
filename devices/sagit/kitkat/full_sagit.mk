@@ -32,12 +32,12 @@ PRODUCT_MANUFACTURER := Xiaomi
 
 PRODUCT_COPY_FILES += \
     vendor/xiaomi/sagit/system.prop:system/build.prop \
-    vendor/xiaomi/sagit/fstab.sagit:root/fstab.sagit \
+    vendor/xiaomi/sagit/fstab.msm8998:root/fstab.msm8998 \
     vendor/xiaomi/sagit/init.rc:root/init.rc \
-    vendor/xiaomi/sagit/init.sagit.rc:root/init.sagit.rc \
-    vendor/xiaomi/sagit/init.sagit.usb.rc:root/init.sagit.usb.rc \
+    vendor/xiaomi/sagit/init.msm8998.rc:root/init.msm8998.rc \
+    vendor/xiaomi/sagit/init.msm8998.usb.rc:root/init.msm8998.usb.rc \
     vendor/xiaomi/sagit/usbudc.sh:root/sbin/usbudc.sh \
-    vendor/xiaomi/sagit/ueventd.sagit.rc:root/ueventd.sagit.rc \
+    vendor/xiaomi/sagit/ueventd.msm8998.rc:root/ueventd.msm8998.rc \
     vendor/xiaomi/sagit/autowinch.sh:root/sbin/autowinch.sh \
     vendor/xiaomi/sagit/wf-setup.sh:root/sbin/wf-setup.sh \
     vendor/xiaomi/sagit/wf-efs-keeper.sh:root/sbin/wf-efs-keeper.sh \
@@ -58,13 +58,13 @@ PRODUCT_COPY_FILES += \
     vendor/xiaomi/sagit/media/media_codecs.xml:system/etc/media_codecs.xml \
     frameworks/native/data/etc/android.hardware.wifi.xml:system/etc/permissions/android.hardware.wifi.xml
 
-# audio.primary.sagit (tinyalsa HAL) + sound recorder jni (CHARQUIRKS:
+# audio.primary.msm8998 (tinyalsa HAL) + sound recorder jni (CHARQUIRKS:
 # "sound recorder needs libsrec_jni in PRODUCT_PACKAGES or it crashes").
 # media_codecs.xml is product-supplied: KitKat's MediaCodecList reads
 # /etc/media_codecs.xml and AOSP only ships one for goldfish/sdk — without it
 # every compressed format fails with UNKNOWN_ERROR (maple TEST 52).
 PRODUCT_PACKAGES += \
-    audio.primary.$(PRODUCT_DEVICE) \
+    audio.primary.msm8998 \
     libsrec_jni
 
 # Firmware blobs live out-of-git at vendor/xiaomi/sagit-fw/{adsp,wlan,modem,audio}/
@@ -166,7 +166,7 @@ PRODUCT_PACKAGES += \
     libEGL_adreno \
     libGLESv1_CM_adreno \
     libGLESv2_adreno \
-    gralloc.$(PRODUCT_DEVICE) \
+    gralloc.msm8998 \
     gralloc.default \
     libGLES_android \
     hybtest \
@@ -175,7 +175,7 @@ PRODUCT_PACKAGES += \
     audiorecord_test \
     rtc-restore \
     time-sync \
-    lights.$(PRODUCT_DEVICE) \
+    lights.msm8998 \
     pdserve
 
 # Android 15 vendor closure staged by tools/libhyb/stage.py: Adreno 540 driver

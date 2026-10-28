@@ -1,4 +1,6 @@
-# ueventd.sagit.rc — KitKat for Xiaomi Mi 6
+# ueventd.msm8998.rc — KitKat for the msm8998 boards (Mi 6 sagit, Mi MIX 2
+# chiron): same node set — tasha slimbus/ALSA, kgsl, ion and the ACDB
+# calibration node.
 # Node ownership for first bringup. Extend from a live `ls -l /dev` +
 # stock ueventd rules once the 4.4 kernel is probed (maple did the same).
 
@@ -19,8 +21,8 @@
 /dev/kgsl-3d0             0666   root       root
 /dev/ion                  0666   root       root
 
-# ACDB calibration: audio.primary.sagit (mediaserver, uid media) loads
+# ACDB calibration: audio.primary.msm8998 (mediaserver, uid media) loads
 # libacdbloader through libhyb; the loader opens /dev/msm_audio_cal and pushes
-# the Mi 6 acdb blocks into the kernel where q6asm/q6afe look them up. Created
-# root:root 0600 by the driver — without this, playback stays silent.
+# the board's acdb blocks into the kernel where q6asm/q6afe look them up.
+# Created root:root 0600 by the driver — without this, playback stays silent.
 /dev/msm_audio_cal       0660   media      audio

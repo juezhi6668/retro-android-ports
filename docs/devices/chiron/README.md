@@ -14,11 +14,16 @@ deliberately **thin**. Everything board-independent is shared with the
 boot-verified [sagit tree](../sagit/README.md) and compiled from
 `vendor/xiaomi/sagit`: the EGL/GLES shims, libhyb, gralloc, the tinyalsa
 audio HAL, lights, `fbpresentd`, `pdserve`, `rtc-restore`. Chiron supplies
-only its product/board configs, `init`/`fstab`/`ueventd`, its own
-`mixer_paths_tasha.xml`, the WLAN ini, and firmware/ACDB staging kept
-outside git. The module names that `ro.hardware` selects are parameterized
-by `TARGET_DEVICE` (`audio.primary.chiron`, `gralloc.chiron`,
-`lights.chiron`), so one source builds for either phone.
+only its product/board config, its own `mixer_paths_tasha.xml`, the WLAN
+ini, and firmware/ACDB staging kept outside git — even the boot ramdisk's
+`init`/`fstab`/`ueventd` files are shared with sagit. Board artifacts are
+named after the **SoC, not the phone**: both boards pass
+`androidboot.hardware=msm8998`, so the ramdisk carries `init.msm8998.rc`,
+`init.msm8998.usb.rc`, `ueventd.msm8998.rc` and `fstab.msm8998`, and
+`/system/lib/hw` carries `gralloc.msm8998.so`, `lights.msm8998.so`,
+`audio.primary.msm8998.so` (chiron's product adds `-DAMP_TAS2559`). The
+MIUI V5 pack installs them under the ROM's own names
+(`gralloc.chiron.so`, `lights.chiron.so`, `audio.primary.msm8974.so`).
 
 ## Status
 
@@ -29,7 +34,7 @@ by `TARGET_DEVICE` (`audio.primary.chiron`, `gralloc.chiron`,
 | Boot | Boots to the UI on the stock `OS3` kernel (Linux 4.4.302, multi-DTB: `dtb_0` sagit id `0x1e`, `dtb_1` chiron id `0x20`) — verified on hardware 2026-10-25. The boot image is built with `BOARD_KERNEL_BASE := 0x00000000` / `pagesize 4096` so its layout (kernel `0x8000`, ramdisk `0x1000000`, tags `0x100`) matches the stock image |
 | Display / GPU | Adreno 540 through libhyb + `fbpresentd`; panel `1080x2160`, density 440, stride 4352. SurfaceFlinger reaches the driver (ES 3.2, first frames swap) |
 | Audio | WCD9341 tasha codec + **TAS2559** smart amp with its TAS2560 companion on QUAT_MI2S (I2S). Headphones use the AIF4 path on `SLIMBUS_6_RX` (SLIM RX2/RX3 → RX INT1_2/INT2_2). Builtin mic is DEC7/AMIC3, headset mic DEC0/ADC2. `mixer_paths_tasha.xml` is taken from the stock dump; the routes are compiled in but **not yet verified by playback** |
-| WiFi | **Works, boot-automatic, verified on a freshly built image cold-booted on hardware 2026-10-27** (association + DHCP, and the Settings/`svc wifi` toggle both directions; earlier milestone 2026-10-26 on hand-pushed files). The whole WCN3990 bring-up stack is shared with sagit and installed by the build: `/sbin/{wf-setup,wf-efs-keeper,wf-wifi-gate,rfs-dirs,modem-hold}.sh` in the ramdisk, the `wf-*` services in `init.chiron.rc`, `sec_config`, the BDF name variants, `wlanmdsp.mbn`, `/system/bin/{wlq,rfssrv2,sm-vndk,linker64}` and the 64-bit vendor daemon/library closure — `linker64` because those daemons are aarch64 and this tree builds arm-only. Root cause was the msm8998 ipc-router IRSC completion never firing; the two fresh-image prerequisites (linker64, `/dev/block/bootdevice` alias) are [wifi-progress.md](wifi-progress.md) §11. `persist` is empty, so the MAC comes from the firmware, not from provisioning |
+| WiFi | **Works, boot-automatic, verified on a freshly built image cold-booted on hardware 2026-10-27** (association + DHCP, and the Settings/`svc wifi` toggle both directions; earlier milestone 2026-10-26 on hand-pushed files). The whole WCN3990 bring-up stack is shared with sagit and installed by the build: `/sbin/{wf-setup,wf-efs-keeper,wf-wifi-gate,rfs-dirs,modem-hold}.sh` in the ramdisk, the `wf-*` services in `init.msm8998.rc`, `sec_config`, the BDF name variants, `wlanmdsp.mbn`, `/system/bin/{wlq,rfssrv2,sm-vndk,linker64}` and the 64-bit vendor daemon/library closure — `linker64` because those daemons are aarch64 and this tree builds arm-only. Root cause was the msm8998 ipc-router IRSC completion never firing; the two fresh-image prerequisites (linker64, `/dev/block/bootdevice` alias) are [wifi-progress.md](wifi-progress.md) §11. `persist` is empty, so the MAC comes from the firmware, not from provisioning |
 | Storage | Internal emulated only; `system` 3 GiB. `persist` mounts but contains nothing (no WiFi MAC, no TAS2559 calibration) |
 | Touch | Synaptics DSX, `synaptics_dsx.idc` reused from sagit — confirm the device name with `getevent -p` |
 | USB | configfs gadget, UDC `a800000.dwc3` (same as sagit) |
@@ -58,9 +63,11 @@ Adreno: DequeueBuffer: dequeueBuffer failed
 SurfaceFlinger: eglSwapBuffers(...) failed with 0x0000300d
 ```
 
-Fix: `GRALLOC_MODULE` is now a compile-time macro defaulting to sagit's
-path, overridden from `egl/Android.mk` with
-`-DGRALLOC_MODULE='"/system/lib/hw/gralloc.$(TARGET_DEVICE).so"'`. The
+Fix: `GRALLOC_MODULE` is now a compile-time macro. At the time it was
+overridden from `egl/Android.mk` with
+`-DGRALLOC_MODULE='"/system/lib/hw/gralloc.$(TARGET_DEVICE).so"'`; since
+the msm8998 unification it is simply
+`"/system/lib/hw/gralloc.msm8998.so"` on both phones. The
 exported symbol keeps its name (`sagit_gralloc_import`) in every board's
 gralloc module, so the shim resolves it unchanged. Only
 `/system/lib/egl/libEGL_adreno.so` differs from the broken image; swapping
@@ -111,7 +118,7 @@ here is committed.
 | Android 15 vendor closure + `fbpresentd` | `vendor/xiaomi/sagit-hyb/root/`, `vendor/xiaomi/sagit-bin/bin/` | reused from the sagit port (`tools/libhyb/`) |
 | WLAN vendor daemons + 64-bit libraries | `vendor/xiaomi/sagit-wifi/{bin,lib64,system-lib64}/` | `devices/chiron/kitkat/wifi-tools/stage-wifi-vnd.sh` against a phone on stock firmware (see [wifi-progress.md §10](wifi-progress.md)) |
 | `wlq` / `rfssrv2` / `sm-vndk` | `vendor/xiaomi/sagit-bin/bin/` | `devices/chiron/kitkat/wifi-tools/build-wf-bins.sh` |
-| `system.prop`, `fstab`, `init*`, `ueventd`, mixer, WLAN ini | in tree | already captured from the stock dump |
+| `system.prop`, `fstab`, `init*`, `ueventd`, mixer, WLAN ini | in tree (the ramdisk files are `vendor/xiaomi/sagit/*msm8998*`; the mixer/WLAN ini are chiron's) | already captured from the stock dump |
 
 ## Documentation and links
 

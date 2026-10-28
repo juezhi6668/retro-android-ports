@@ -1,4 +1,4 @@
-/* audio.primary.sagit — tinyalsa HAL for the Xiaomi Mi 6.
+/* audio.primary.msm8998 — tinyalsa HAL for the msm8998 boards (Mi 6, Mi MIX 2).
  *
  * Ported pattern from maple/CHARQUIRKS audio (audio.primary.pdx203): playback,
  * capture and a usb-card fallback through the adsp, decimator +20 dB so
@@ -51,7 +51,7 @@
  * (slimbus into the adsp, nothing drives it: CHARQUIRKS).
  */
 
-#define LOG_TAG "audio.primary.sagit"
+#define LOG_TAG "audio.primary.msm8998"
 
 #include <errno.h>
 #include <limits.h>
@@ -345,7 +345,7 @@ static int ensure_card(struct sagit_audio_device *adev)
     }
     if (!adev->mixer)
         return -ENODEV;
-    ALOGI("audio.primary.sagit: late card %u (%s) mixer %p", adev->card,
+    ALOGI("audio.primary.msm8998: late card %u (%s) mixer %p", adev->card,
           adev->card_name, (void *)adev->mixer);
     /* Stock's mixer_paths_tasha.xml parks the amp in Powerdown from its
      * init section. The container comes up with a playback profile
@@ -460,7 +460,7 @@ static int is_headset_in(uint32_t device)
 static void out_route(struct sagit_audio_device *adev)
 {
     int headset = is_headset_out(adev->out_device);
-    ALOGI("audio.primary.sagit: route out 0x%x -> %s (acdb %d)",
+    ALOGI("audio.primary.msm8998: route out 0x%x -> %s (acdb %d)",
           adev->out_device, headset ? "headset" : "speaker",
           headset ? ACDB_ID_HEADSET : ACDB_ID_SPEAKER);
     acdb_stream_cal(adev, headset ? ACDB_ID_HEADSET : ACDB_ID_SPEAKER,
@@ -481,7 +481,7 @@ static void out_route(struct sagit_audio_device *adev)
 static void in_route(struct sagit_audio_device *adev, unsigned int rate)
 {
     int headset_mic = is_headset_in(adev->in_device);
-    ALOGI("audio.primary.sagit: route in 0x%x -> %s (acdb %d, %u Hz, txcal %d)",
+    ALOGI("audio.primary.msm8998: route in 0x%x -> %s (acdb %d, %u Hz, txcal %d)",
           adev->in_device, headset_mic ? "headset-mic" : "builtin-mic",
           headset_mic ? ACDB_ID_HEADSET_MIC : ACDB_ID_HANDSET_MIC, rate,
           SAGIT_TX_CAL);
@@ -591,7 +591,7 @@ static int out_set_parameters(struct audio_stream *stream, const char *kvpairs)
         pthread_mutex_lock(&out->adev->lock);
         out->adev->out_device = device;
         pthread_mutex_unlock(&out->adev->lock);
-        ALOGI("audio.primary.sagit: out routing=0x%x", device);
+        ALOGI("audio.primary.msm8998: out routing=0x%x", device);
     }
     return 0;
 }
@@ -773,7 +773,7 @@ static int in_set_parameters(struct audio_stream *stream, const char *kvpairs)
         pthread_mutex_lock(&in->adev->lock);
         in->adev->in_device = device;
         pthread_mutex_unlock(&in->adev->lock);
-        ALOGI("audio.primary.sagit: in routing=0x%x", device);
+        ALOGI("audio.primary.msm8998: in routing=0x%x", device);
     }
     return 0;
 }
@@ -902,7 +902,7 @@ static int adev_open_output_stream(struct audio_hw_device *dev,
      * current (wired headset plug/unplug). Keep the last non-zero one. */
     if (devices) {
         adev->out_device = devices;
-        ALOGI("audio.primary.sagit: open out, devices 0x%x", devices);
+        ALOGI("audio.primary.msm8998: open out, devices 0x%x", devices);
     }
     out->stream.common.get_sample_rate = out_get_sample_rate;
     out->stream.common.set_sample_rate = out_set_sample_rate;
@@ -957,7 +957,7 @@ static int adev_open_input_stream(struct audio_hw_device *dev,
     in->standby = 1;
     if (devices) {
         adev->in_device = devices;
-        ALOGI("audio.primary.sagit: open in, devices 0x%x", devices);
+        ALOGI("audio.primary.msm8998: open in, devices 0x%x", devices);
     }
     in->rate = config->sample_rate ? config->sample_rate : 8000;
     in->channels = (config->channel_mask == AUDIO_CHANNEL_IN_STEREO) ? 2 : 1;
@@ -1004,7 +1004,7 @@ static int adev_set_parameters(struct audio_hw_device *dev, const char *kvpairs)
         else
             adev->out_device = device;
         pthread_mutex_unlock(&adev->lock);
-        ALOGI("audio.primary.sagit: dev routing=0x%x (%s)", device,
+        ALOGI("audio.primary.msm8998: dev routing=0x%x (%s)", device,
               (device & AUDIO_DEVICE_BIT_IN) ? "in" : "out");
     }
     return 0;
@@ -1143,7 +1143,7 @@ static int adev_open(const hw_module_t *module, const char *name,
         }
     }
     adev->mixer = mixer_open(adev->card);
-    ALOGI("audio.primary.sagit: card %u mixer %p", adev->card,
+    ALOGI("audio.primary.msm8998: card %u mixer %p", adev->card,
           (void *)adev->mixer);
     adev->device.common.tag = HARDWARE_DEVICE_TAG;
     adev->device.common.version = AUDIO_DEVICE_API_VERSION_2_0;
@@ -1180,7 +1180,7 @@ struct audio_module HAL_MODULE_INFO_SYM = {
         .version_major = 1,
         .version_minor = 0,
         .id = AUDIO_HARDWARE_MODULE_ID,
-        .name = "sagit tinyalsa audio HAL",
+        .name = "msm8998 tinyalsa audio HAL",
         .author = "retro-android-ports",
         .methods = &hal_module_methods,
     },

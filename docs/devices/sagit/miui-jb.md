@@ -50,12 +50,15 @@ Built by `scripts/build-sagit-jb-boot.py`: the KitKat port's
 | `init.environ.rc` | the 4.4 build's `BOOTCLASSPATH` lists core-libart / framework2 / webviewchromium / okhttp / telephony-common / mms-common, none of which exist in this ROM. JB needs its own list, plus MIUI's `framework_ext.jar` |
 | `init.sagit.rc` | drops `fbpresentd`/`pdserve`/`rtc-restore`/`bootlog`/`modem_hold` (binaries or firmware only the KitKat tree has), gives `sdcard` Jelly Bean's positional arguments, creates the 4.1 storage layout (`/storage/sdcard0`, `/sdcard`, `/mnt/sdcard`) |
 
-Kernel, cmdline, base and page size are unchanged from
-`devices/sagit/kitkat/BoardConfig.mk` (4.4.247 `Image.gz-dtb`, patched DTB).
+Kernel, base and page size are unchanged from
+`devices/sagit/kitkat/BoardConfig.mk` (4.4.247 `Image.gz-dtb`, patched DTB);
+the cmdline is the one field that differs — the JB builder writes
+`androidboot.hardware=sagit` (not the KitKat port's `msm8998`) so init
+imports the overlay's `init.sagit.rc`.
 
 Note that JB `vold` reads `/system/etc/vold.fstab` (the ROM ships
 `dev_mount sdcard /storage/sdcard0 auto /devices/platform/msm_sdcc.3/...`),
-not `/fstab.<hardware>` — so the ramdisk `fstab.sagit` is inert here.
+not `/fstab.<hardware>` — so the ramdisk `fstab.msm8998` is inert here.
 
 ## Open gaps (nothing below is verified on hardware)
 

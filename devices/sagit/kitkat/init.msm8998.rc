@@ -1,15 +1,18 @@
-# init.sagit.rc — KitKat for Xiaomi Mi 6 (MSM8998, UFS/GPT/ext4)
-# Imported from init.rc via `import /init.${ro.hardware}.rc` (ro.hardware=sagit),
-# exactly once — do NOT add a second explicit import (it double-parses this
-# file and spams ignored-duplicate errors for every service below).
+# init.msm8998.rc — KitKat for the msm8998 boards: Xiaomi Mi 6 ("sagit") and
+# Mi MIX 2 ("chiron"). One file for both — same SoC, same 4.4 kernel, same
+# UFS/GPT partition layout, same WCN3990 + legacy ipc-router WLAN stack.
+# Imported from init.rc via `import /init.${ro.hardware}.rc` with
+# androidboot.hardware=msm8998, exactly once — do NOT add a second explicit
+# import (it double-parses this file and spams ignored-duplicate errors for
+# every service below).
 #
 # Mounts: every candidate path gets its OWN `on init` stanza. A failing init
 # command aborts its action, so one bad mount must not take the rest down
 # (maple TEST 6). The by-name level and the ufshc-direct level are both tried;
-# whichever exists mounts, the other fails silently. fstab.sagit does the same
-# at the fs stage, so a boot survives either path winning.
+# whichever exists mounts, the other fails silently. fstab.msm8998 does the
+# same at the fs stage, so a boot survives either path winning.
 
-import /init.sagit.usb.rc
+import /init.msm8998.usb.rc
 
 on init
     # PERMISSIVE SELinux for bringup: KitKat policy mismatches the 4.4 kernel
@@ -17,7 +20,7 @@ on init
     setenforce 0
 
 # NOTE: no coldboot wait — KitKat init has no `wait_for_coldboot_done`
-# (invalid command, aborts the action). fstab.sagit's `wait` covers timing.
+# (invalid command, aborts the action). fstab.msm8998's `wait` covers timing.
 on init
     mkdir /cache 0770 system cache
     mkdir /persist 0771 system system
@@ -90,8 +93,9 @@ on post-fs-data
     mkdir /data/media 0770 media_rw media_rw
 
     # firmware_class.path: the kernel resolves firmware from the requester's
-    # root; /vendor -> /system/vendor, where full_sagit.mk installs the
-    # modem/adsp/a540 blobs. A miss stalls ~60 s per file in ueventd.
+    # root; /vendor -> /system/vendor, where the product makefiles install the
+    # modem/adsp/a540 blobs (chiron adds the tas2559 amp containers). A miss
+    # stalls ~60 s per file in ueventd.
     write /sys/module/firmware_class/parameters/path /vendor/firmware
     # Modem first (PIL from /vendor/firmware), then the ADSP: with the service
     # locator enabled the ADSP's card/slimbus clients register through it and
@@ -106,15 +110,15 @@ on post-fs-data
     # Zero-copy presentation: SurfaceFlinger's ION buffers are committed to the
     # MDSS pipe by fbpresentd (64-bit; the 32-bit compat path of
     # MSMFB_ATOMIC_COMMIT crashes this kernel). Must be up before the first
-    # post; gralloc.sagit falls back to copy + FBIOPUT_VSCREENINFO otherwise
+    # post; gralloc.msm8998 falls back to copy + FBIOPUT_VSCREENINFO otherwise
     # (persist.gralloc.fb_commit=0 forces the copy path).
     start fbpresentd
-    # Touch: Mi 6 uses the Synaptics DSX driver (sagit_defconfig:
-    # CONFIG_TOUCHSCREEN_SYNAPTICS_DSX_*). Unlike maple's clearpad there is no
-    # post_probe_start gate to write — the driver probes on its own.
-    # verify-me: `getevent -p` must list an ABS_MT device; the idc filename
-    # must match that device's name (synaptics_dsx.idc is a guess — rename per
-    # `dumpsys input` if needed).
+    # Touch: both boards use the Synaptics DSX driver (sagit_defconfig /
+    # chiron_defconfig: CONFIG_TOUCHSCREEN_SYNAPTICS_DSX_*). Unlike maple's
+    # clearpad there is no post_probe_start gate to write — the driver probes
+    # on its own. verify-me: `getevent -p` must list an ABS_MT device; the idc
+    # filename must match that device's name (synaptics_dsx.idc is a guess —
+    # rename per `dumpsys input` if needed).
 
 on boot
     # Safety net: (re)start adbd now that init is up. No-op if running.
@@ -149,7 +153,7 @@ service bootlog /system/bin/dump-boot-log.sh
     user root
     disabled
 
-# internal storage only — no microSD on Mi 6, so no fuse_sdcard1 service
+# internal storage only — no microSD on either board, so no fuse_sdcard1 service
 service sdcard /system/bin/sdcard -u 1023 -g 1023 -l /data/media /mnt/shell/emulated
     class main
 
@@ -185,7 +189,7 @@ service pdserve /system/bin/pdserve
     group root
 
 # ADSP boot, sequenced after the modem (bounded 20 s wait, resolved by NAME —
-# Mi 6's subsystem indices differ from Sony's). Without this write the sound
+# the msm8998 subsystem indices differ from Sony's). Without this write the sound
 # card never probes ("No soundcards found").
 service adsp_boot /system/bin/sh /sbin/adsp-boot.sh
     class core
@@ -242,8 +246,8 @@ service iprenew_p2p /system/bin/dhcpcd -n
 
 # ---- WLAN bring-up stack (WCN3990 behind the modem's wlan_pd) --------------
 # sagit and chiron share the WCN3990 + msm8998 legacy ipc-router, so this block
-# is identical in both init files; the scripts live in devices/sagit/kitkat/ and
-# land in the boot ramdisk as /sbin (full_sagit.mk / full_chiron.mk).
+# is common; the scripts live in devices/sagit/kitkat/ (the shared tree) and land
+# in the boot ramdisk as /sbin from both product makefiles.
 #
 # Why these are not ordinary init services:
 #  - rmt_storage and cnss-daemon are 64-bit vendor binaries. Exec'd directly by

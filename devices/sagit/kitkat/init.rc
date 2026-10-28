@@ -1,7 +1,7 @@
-# init.rc for sagit (KitKat 4.4.4) — AOSP system/core/rootdir/init.rc
-# plus sagit mounts/gadget via stock `import /init.${ro.hardware}.rc`
-# (ro.hardware=sagit from androidboot.hardware). Single import only: a
-# duplicate `import /init.sagit.rc` here used to spam kmsg with ignored
+# init.rc for the msm8998 boards (KitKat 4.4.4) — AOSP system/core/rootdir/init.rc
+# plus the board mounts/gadget via stock `import /init.${ro.hardware}.rc`
+# (ro.hardware=msm8998 from androidboot.hardware). Single import only: a
+# duplicate `import /init.msm8998.rc` here used to spam kmsg with ignored
 # duplicate service definitions (bootlog/autowinch/sdcard).
 # Shipped to ramdisk root (TARGET_PROVIDES_INIT_RC=true).
 

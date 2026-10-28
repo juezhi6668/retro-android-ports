@@ -27,11 +27,11 @@
 #include <unistd.h>
 #include "../hyb/hyb.h"
 
-/* the board's KitKat gralloc module: hw_get_module_by_class picks gralloc.<ro.hardware>,
- * so the shim's import must come from the same file the platform loaded (the module
- * exports sagit_gralloc_import on every board). Set from TARGET_DEVICE in Android.mk. */
+/* the KitKat gralloc module: hw_get_module_by_class picks gralloc.<ro.hardware>, so
+ * the shim's import must come from the same file the platform loaded (the module
+ * exports sagit_gralloc_import on every board). One module name for both products. */
 #ifndef GRALLOC_MODULE
-#define GRALLOC_MODULE "/system/lib/hw/gralloc.sagit.so"
+#define GRALLOC_MODULE "/system/lib/hw/gralloc.msm8998.so"
 #endif
 
 typedef void (*fn_t)(void);

@@ -184,7 +184,7 @@ struct hw_module_t HAL_MODULE_INFO_SYM = {
     .version_major = 1,
     .version_minor = 0,
     .id = LIGHTS_HARDWARE_MODULE_ID,
-    .name = "sagit lights",
-    .author = "kitkat-sagit",
+    .name = "msm8998 lights",
+    .author = "kitkat-msm8998",
     .methods = &lights_module_methods,
 };

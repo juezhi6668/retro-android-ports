@@ -1,10 +1,11 @@
-# init.sagit.usb.rc — configfs USB gadget + adb for Xiaomi Mi 6
+# init.msm8998.usb.rc — configfs USB gadget + adb for the msm8998 boards
+# (Xiaomi Mi 6 "sagit", Mi MIX 2 "chiron"; same a800000 SSUSB/dwc3 controller)
 # ported from pdx203-jellybean by @chardidathing
 # The 4.4 kernel is configfs only (androidboot.configfs=true): the legacy
 # android_usb sysfs writes in KitKat's init.usb.rc just fail.
 on fs
     # kitkat adbd only writes fs/hs descriptors, at superspeed the config comes up empty
-    # verify-me: a800000.ssusb is the msm8998 controller (same as maple)
+    # a800000.ssusb is the msm8998 controller (same as maple)
     write /sys/devices/soc/a800000.ssusb/speed high
     mount configfs none /config
     mkdir /config/usb_gadget/g1 0770 shell shell
@@ -12,9 +13,9 @@ on fs
     write /config/usb_gadget/g1/idProduct 0x4ee7
     write /config/usb_gadget/g1/bcdUSB 0x0200
     mkdir /config/usb_gadget/g1/strings/0x409 0770 shell shell
-    write /config/usb_gadget/g1/strings/0x409/serialnumber sagitkk
+    write /config/usb_gadget/g1/strings/0x409/serialnumber msm8998kk
     write /config/usb_gadget/g1/strings/0x409/manufacturer Xiaomi
-    write /config/usb_gadget/g1/strings/0x409/product sagit-kitkat
+    write /config/usb_gadget/g1/strings/0x409/product msm8998-kitkat
     mkdir /config/usb_gadget/g1/configs/b.1 0770 shell shell
     mkdir /config/usb_gadget/g1/configs/b.1/strings/0x409 0770 shell shell
     write /config/usb_gadget/g1/configs/b.1/strings/0x409/configuration adb
@@ -28,8 +29,8 @@ on property:sys.usb.config=adb
     start adbd
     start usbudc
 
-# usbudc.sh resolves the UDC name from /sys/class/udc (sagit's may be
-# a800000.dwc3 or a800000.ssusb) and binds the gadget once adbd has written
-# its descriptors, re-binding whenever adbd drops it.
+# usbudc.sh resolves the UDC name from /sys/class/udc (a800000.dwc3 or
+# a800000.ssusb) and binds the gadget once adbd has written its descriptors,
+# re-binding whenever adbd drops it.
 service usbudc /system/bin/sh /sbin/usbudc.sh
     disabled

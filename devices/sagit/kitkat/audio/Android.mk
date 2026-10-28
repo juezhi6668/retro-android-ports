@@ -1,13 +1,13 @@
-# audio.primary.<device> — tinyalsa HAL for the msm8998-tasha-snd-card,
-# shared by every msm8998 board in this tree (sagit, chiron). The module is
-# named after TARGET_DEVICE because hw_get_module_by_class looks up
-# audio.primary.$(ro.hardware) first. See audio_hw.c for the route tables
+# audio.primary.msm8998 — tinyalsa HAL for the msm8998-tasha-snd-card, shared
+# by every msm8998 board in this tree (sagit, chiron). One module name:
+# hw_get_module_by_class looks up audio.primary.<ro.hardware> and both products
+# boot with androidboot.hardware=msm8998. See audio_hw.c for the route tables
 # (speaker/mic, decimator +20 dB, silent-safe while the card is absent) and
 # the libhyb ACDB loader that feeds the dsp the ROM's acdb blocks.
 LOCAL_PATH := $(call my-dir)
 
 include $(CLEAR_VARS)
-LOCAL_MODULE := audio.primary.$(TARGET_DEVICE)
+LOCAL_MODULE := audio.primary.msm8998
 LOCAL_MODULE_PATH := $(TARGET_OUT_SHARED_LIBRARIES)/hw
 LOCAL_SRC_FILES := audio_hw.c
 LOCAL_C_INCLUDES += external/tinyalsa/include $(LOCAL_PATH)/../hyb

@@ -1,7 +1,7 @@
 /* audiotrack_test — play a tone through AudioFlinger and the sagit HAL.
  *
  * tone_test talks to tinyalsa directly, which bypasses everything above the
- * kernel. This goes AudioTrack -> AudioFlinger -> audio.primary.sagit, so it
+ * kernel. This goes AudioTrack -> AudioFlinger -> audio.primary.msm8998, so it
  * exercises the path apps use: the HAL opens the PCM, sends the ACDB
  * calibration and writes the speaker route. Speaker output is the check that
  * matters; pair it with tone_test's mic capture for an acoustic loopback.

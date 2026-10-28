@@ -3,7 +3,7 @@
  * system_server saved in /data/system/time/rtc_offset when it last set the time (see
  * patches/kitkat/frameworks-base-time-without-dev-alarm.patch). This kernel has no /dev/alarm
  * either, so nothing else restores the clock across reboots.
- * Runs once from init at post-fs-data (service rtc-restore in init.sagit.rc); it is a no-op
+ * Runs once from init at post-fs-data (service rtc-restore in init.msm8998.rc); it is a no-op
  * until the offset file exists, and logs what it did. */
 #define LOG_TAG "rtc-restore"
 #include <errno.h>

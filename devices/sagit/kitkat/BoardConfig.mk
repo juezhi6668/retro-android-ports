@@ -12,7 +12,7 @@ LOCAL_PATH := $(call my-dir)
 TARGET_NO_BOOTLOADER := true
 TARGET_NO_RADIOIMAGE := true
 TARGET_PROVIDES_INIT_RC := true
-# lights.sagit (vendor/xiaomi/sagit/lights) is the lights HAL; stop the build
+# lights.msm8998 (vendor/xiaomi/sagit/lights) is the lights HAL; stop the build
 # from adding the generic default
 TARGET_PROVIDES_LIBLIGHT := true
 
@@ -23,14 +23,16 @@ BOARD_KERNEL_BASE := 0x00000000
 BOARD_KERNEL_PAGESIZE := 4096
 BOARD_KERNEL_IMAGE_NAME := Image.gz-dtb
 # Cmdline: take the REAL one from the dumped Lineage boot.img before judging
-# any boot failure — `abootimg -x boot.img` prints it. androidboot.hardware=sagit
-# is mandatory: KitKat init imports /init.${ro.hardware}.rc from it, and
-# ro.hardware=sagit is what selects init.sagit.rc + fstab.sagit.
+# any boot failure — `abootimg -x boot.img` prints it. androidboot.hardware
+# must be msm8998, not the board name: it is what KitKat init imports
+# (/init.${ro.hardware}.rc), what vold reads (/fstab.${ro.hardware}), what
+# ueventd reads (/ueventd.${ro.hardware}.rc) and the first key hw_get_module
+# tries (*.msm8998.so) — shared by every msm8998 board here.
 # service_locator.enable=1 is required for WLAN (icnss learns the modem's
 # wlan/fw domain through the servreg locator — maple TEST 39).
-# androidboot.configfs=true is the 4.4 USB path: init.sagit.usb.rc builds the
+# androidboot.configfs=true is the 4.4 USB path: init.msm8998.usb.rc builds the
 # gadget, the legacy android_usb sysfs nodes do not exist on this kernel.
-BOARD_KERNEL_CMDLINE := ehci-hcd.park=3 lpm_levels.sleep_disabled=1 sched_enable_hmp=0 sched_enable_power_aware=1 service_locator.enable=1 swiotlb=2048 androidboot.configfs=true androidboot.usbcontroller=a800000.dwc3 loop.max_part=7 androidboot.hardware=sagit
+BOARD_KERNEL_CMDLINE := ehci-hcd.park=3 lpm_levels.sleep_disabled=1 sched_enable_hmp=0 sched_enable_power_aware=1 service_locator.enable=1 swiotlb=2048 androidboot.configfs=true androidboot.usbcontroller=a800000.dwc3 loop.max_part=7 androidboot.hardware=msm8998
 
 BOARD_BOOTIMAGE_PARTITION_SIZE := 67108864
 BOARD_RECOVERYIMAGE_PARTITION_SIZE := 67108864
@@ -44,8 +46,8 @@ BOARD_SYSTEMIMAGE_PARTITION_SIZE := 3221225472
 BOARD_CACHEIMAGE_PARTITION_SIZE := 268435456
 BOARD_FLASH_BLOCK_SIZE := 131072
 # androidboot.hardware is NOT appended by the bootloader (the stock boot.img
-# carries it and /proc/cmdline shows one copy), so hardware=sagit selects
-# init.sagit.rc. The bootloader does append mdss_mdp.panel=... for the JDI
+# carries it and /proc/cmdline shows one copy), so hardware=msm8998 selects
+# init.msm8998.rc. The bootloader does append mdss_mdp.panel=... for the JDI
 # r63452 panel; nothing to do about that on our side.
 # GPT/ext4 device (not MTD/yaffs2): without this KitKat builds a yaffs2
 # system.img (maple 2026-10-13: mkyaffs2image ran). system.img builds sparse —
@@ -55,11 +57,13 @@ BOARD_SYSTEMIMAGE_FILE_SYSTEM_TYPE := ext4
 BOARD_USERDATAIMAGE_FILE_SYSTEM_TYPE := ext4
 BOARD_CACHEIMAGE_FILE_SYSTEM_TYPE := ext4
 
-# Platform: DELIBERATELY `sagit`, not `msm8998` (cooper/maple precedent:
-# KitKat's hardware/qcom/* only knows msm8960/8974-era HALs; nothing knows
-# msm8998 + Adreno 540 + 4.4). Set `msm8998` only when a QCOM HAL path is
-# proven; generic audio/camera/gps stay stubs until then. Graphics is not a
-# generic path: libhyb loads the real Adreno 540 driver (below).
+# Platform: DELIBERATELY the board name, not `msm8998` (cooper/maple
+# precedent): this is the device identity (ro.product.board) and KitKat's
+# hardware/qcom/* only knows msm8960/8974-era HALs, so it must never select
+# one. HAL module lookup does not go through it — the shared modules
+# (gralloc/lights/audio.primary) resolve via ro.hardware=msm8998 first (the
+# cmdline above). Graphics is not a generic path: libhyb loads the real
+# Adreno 540 driver (below).
 TARGET_BOARD_PLATFORM := sagit
 TARGET_BOARD_PLATFORM_GPU := qcom-adreno540
 
@@ -91,7 +95,7 @@ TARGET_CPU_SMP := true
 # Assert string used by the recovery updater-script
 TARGET_OTA_ASSERT_DEVICE := sagit
 
-# Audio: tinyalsa HAL in vendor/xiaomi/sagit/audio (audio.primary.sagit).
+# Audio: tinyalsa HAL in vendor/xiaomi/sagit/audio (audio.primary.msm8998).
 # Mi 6 is WCD9341 ("tasha") through the ADSP, so the card is
 # msm8998-tasha-snd-card — the card name maple's HAL already prefers (maple
 # runs tavil and tasha side by side; tasha is the one that registers there).
@@ -100,7 +104,7 @@ TARGET_OTA_ASSERT_DEVICE := sagit
 # tools/libhyb/stage.py; adsp firmware (modem partition `image/adsp.*`) is
 # staged out-of-git (full_sagit.mk).
 #   BOARD_USES_GENERIC_AUDIO intentionally unset so AudioFlinger links
-#   audio.primary.sagit instead of the silent stub.
+#   audio.primary.msm8998 instead of the silent stub.
 #   USE_CAMERA_STUB true for first bringup: the Mi 6 camera is a QTI 64-bit
 #   closure with no KitKat HAL, and camera_service otherwise waits on it.
 BOARD_HAVE_BLUETOOTH := true

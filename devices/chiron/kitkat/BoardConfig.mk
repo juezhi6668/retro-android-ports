@@ -10,7 +10,7 @@ LOCAL_PATH := $(call my-dir)
 TARGET_NO_BOOTLOADER := true
 TARGET_NO_RADIOIMAGE := true
 TARGET_PROVIDES_INIT_RC := true
-# lights.<device> (vendor/xiaomi/sagit/lights) is the lights HAL; stop the
+# lights.msm8998 (vendor/xiaomi/sagit/lights) is the lights HAL; stop the
 # build from adding the generic default
 TARGET_PROVIDES_LIBLIGHT := true
 
@@ -24,13 +24,14 @@ BOARD_KERNEL_BASE := 0x00000000
 BOARD_KERNEL_PAGESIZE := 4096
 BOARD_KERNEL_IMAGE_NAME := Image.gz-dtb
 # Cmdline: the stock chiron one (dumped from OS3/boot.img) with
-# androidboot.hardware switched to chiron — KitKat init imports
-# /init.${ro.hardware}.rc from it and ro.hardware=chiron selects
-# init.chiron.rc + fstab.chiron + the *.chiron HAL modules. configfs and the
-# dwc3 controller name drive the 4.4 USB gadget in init.chiron.usb.rc;
+# androidboot.hardware switched to msm8998, the name the shared userspace uses:
+# KitKat init imports /init.${ro.hardware}.rc, vold reads /fstab.${ro.hardware},
+# ueventd reads /ueventd.${ro.hardware}.rc and hw_get_module tries
+# *.msm8998.so first. configfs and the dwc3 controller name drive the 4.4 USB
+# gadget in init.msm8998.usb.rc;
 # service_locator is required for WLAN (icnss), swiotlb for the 4.4 ion/dma
 # path, loop.max_part for the 7-partition loop devices.
-BOARD_KERNEL_CMDLINE := androidboot.console=ttyMSM0 msm_rtb.filter=0x37 ehci-hcd.park=3 service_locator.enable=1 swiotlb=2048 loop.max_part=7 sched_enable_hmp=0 sched_enable_power_aware=1 androidboot.configfs=true androidboot.usbcontroller=a800000.dwc3 androidboot.hardware=chiron
+BOARD_KERNEL_CMDLINE := androidboot.console=ttyMSM0 msm_rtb.filter=0x37 ehci-hcd.park=3 service_locator.enable=1 swiotlb=2048 loop.max_part=7 sched_enable_hmp=0 sched_enable_power_aware=1 androidboot.configfs=true androidboot.usbcontroller=a800000.dwc3 androidboot.hardware=msm8998
 
 BOARD_BOOTIMAGE_PARTITION_SIZE := 67108864
 BOARD_RECOVERYIMAGE_PARTITION_SIZE := 67108864
@@ -45,8 +46,9 @@ BOARD_SYSTEMIMAGE_FILE_SYSTEM_TYPE := ext4
 BOARD_USERDATAIMAGE_FILE_SYSTEM_TYPE := ext4
 BOARD_CACHEIMAGE_FILE_SYSTEM_TYPE := ext4
 
-# Platform: `chiron`, same reasoning as sagit — KitKat's hardware/qcom has no
-# msm8998 path, so ro.board.platform must not point at one.
+# Platform: `chiron`, same reasoning as sagit — this is the device identity
+# (ro.product.board), KitKat's hardware/qcom has no path for it, and HAL module
+# lookup goes through ro.hardware=msm8998 instead.
 TARGET_BOARD_PLATFORM := chiron
 TARGET_BOARD_PLATFORM_GPU := qcom-adreno540
 
@@ -66,8 +68,8 @@ TARGET_CPU_SMP := true
 
 TARGET_OTA_ASSERT_DEVICE := chiron
 
-# Audio: shared tinyalsa HAL source, built as audio.primary.chiron with
-# -DAMP_TAS2559 (vendor/xiaomi/sagit/audio/Android.mk). Card is
+# Audio: shared tinyalsa HAL source, built as audio.primary.msm8998 with
+# -DAMP_TAS2559 for this product (vendor/xiaomi/sagit/audio/Android.mk). Card is
 # msm8998-tasha-snd-card; the speaker amp is a TAS2559 on QUAT_MI2S
 # (kernel DAI link msm_quat_mi2s_tas2559_dai_links); ACDB data (ChironS +
 # Forte) is staged under vendor/xiaomi/chiron-hyb.
