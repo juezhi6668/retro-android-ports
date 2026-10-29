@@ -411,6 +411,94 @@ too, which is why the launcher now forks, redirects rild's stdout/stderr to
 `/data/misc/radio/rild-console.log` and reports `exit=`/`signal=` to kmsg.** Flash boot and
 system together, then read `console-ramlog` plus that log before touching the SIM state.
 
+**V5 with Bluetooth (2026-10-29, works on hardware).** Installing this port's HAL was not
+enough, and that is the whole story of this step. V5 *does* ship a `libbt-vendor.so` — under
+`/system/vendor/lib`, MIUI's own AR3012/ath3k + Rome-era CAF bring-up (its strings are
+`ath3k_init`, `Starting hciattach daemon`, `/system/etc/firmware/ar3k/`,
+`Signedrompatch_v{20,21,24}.bin`, and it powers the chip through
+`/sys/class/rfkill/rfkill%d/state` and never opens `/dev/btpower`). KitKat's linker searches
+`/system/vendor/lib` **before** `/system/lib`, so that library won
+`libbt-hci.so`'s `dlopen("libbt-vendor.so")` and drove a chip this board does not have: the
+Bluetooth process stayed alive, the adapter never registered, and kmsg read
+`BluetoothManagerService: MESSAGE_ENABLE: mBluetooth = null` → `Message: 100` →
+`MESSAGE_TIMEOUT_BIND`, while `/proc/<pid>/maps` listed the vendor path and had our file
+mapped nowhere. Left behind as a tell: `[bluetooth.hciattach]: [true]`, which only that old
+library sets. Measured 2026-10-29 on sagit: renaming that single file was sufficient — the
+next enable mapped inode 2690 = `/system/lib/libbt-vendor.so`, opened `/dev/ttyHS0` (fd 75),
+and reached `STATE_ON` at `[ 512.648044]` followed immediately by inquiry results
+(`DeviceFoundHandler created new CachedBluetoothDevice: 64:68:70:22:52:48`, …).
+
+So the pack has to *remove* the base board's blobs, not only add ours. `inject-v5-system.sh`
+now starts with a purge section (everything copied to
+`/home/juezhi/mi5-wifi/backup/cancro/` first, pristine copy kept):
+
+- `/system/etc/firmware/` — everything except our own `bt/`: `Signedrompatch_v20/21/24.bin`
+  (Rome patchram), `ath6k/`, `wcnss.b{00,01,02,04,06,07,08,09}.b0x` + `wcnss.mdt`, `venus.*`,
+  `cpp_firmware_v1_*`, `a225/a300/a330/leia_p*_pm4*.fw` (Adreno 3xx), `wcd9320/`, `wlan/`,
+  `nfc_test.bin`. `/system/etc/firmware` is left holding only `bt/image/*` (8 files).
+- `/system/vendor/lib/libbt-vendor.so` (42148 B, the ath3k bring-up) and
+  `/system/vendor/lib/libbtnv.so` — the two files that shadowed and fed the old rome path.
+- Then the install: `/system/lib/libbt-vendor.so` md5 `d4b8857dbd935062042fd5ad9b2a09ca`
+  (byte-identical to `out/target/product/sagit/system/lib`, the binary verified on chiron),
+  `/system/etc/firmware/bt/image/` and the classic-feature
+  `/system/etc/permissions/android.hardware.bluetooth.xml` V5 also lacked (4.4 Settings will
+  not even draw the toggle without it).
+- Assert at the end: no `libbt-vendor.so` anywhere else in the tree, `/system/lib`'s copy
+  `cmp`-identical to the build, `crbtfw21.tlv` + `crnv21.bin` survived, and
+  `/system/vendor/lib/libbt-vendor.so` gone — a future pack that reintroduces the shadow
+  fails instead of silently losing Bluetooth again.
+
+Nothing that still worked was in that purge, checked rather than assumed: no script in the
+tree and no ramdisk `wf-*` file mentions `etc/firmware`; `cnss-daemon` searches
+`/vendor/firmware`, `/vendor/firmware_mnt/image` and `/firmware/image` (and
+`WCNSS_qcom_cfg.ini`, the `bdf_*` variants and `wlanmdsp.mbn` are all still present in the
+packed image); our `audio.primary.msm8998.so` and `libhardware_legacy.so` contain no firmware
+path at all; and sensors were already dead on V5 (`sensorservice` runs but
+`OrientationEventListener: Cannot detect sensors. Not enabled`, because `sensors.msm8974.so`
+and `sensors.st_mve.so` find no hardware on this kernel), so the sensor-hub
+`Signedrompatch_*.bin` files were not loadable anyway. A duplicate-basename audit of the whole
+tree still lists 57 names, but the rest are MIUI's own `/system/vendor/lib` mirrors of bionic
+and QC libraries, which the RIL launcher outranks with its private `LD_LIBRARY_PATH` — the BT
+library was the only one reached by bare soname from a process with no such override.
+
+Two V5-wide facts worth having written down: **`logcat` cannot work on this ROM at all** —
+there is no `/system/bin/logd` and no `/dev/log` — while MIUI's framework falls back to
+`/dev/kmsg`, so `dmesg` is the log channel (that is how both the failure and the fix were
+read). And `repack-v5-boot.sh` now appends the two BT node rules (`0660 bluetooth net_bt`) to
+the ramdisk's `ueventd.msm8998.rc` (1445 → 1970 bytes, 12 `/dev` rules, asserts
+`/dev/msm_audio_cal` still present), because the script only ever *renamed* `.sagit` →
+`.msm8998` and never copied the repo file: without that, a repo-side ueventd change could not
+reach V5 no matter how many times the boot was repacked.
+
+Pair: `boot-mi5-bt.img` md5 `71008856d29ce9274b387504ddab999d` (ramdisk 343433, unchanged by
+the purge — this is a system-only fix) + `system_miui5_bt2.img` md5
+`ebc9ac38f59d34f157345c76bd141411`, packaged with `MD5SUMS` in
+`C:\download\chiron\sagit-v5-bt2-20261029\`. The pair already on the phone
+(`system_miui5_bt.img` md5 `8f06edc566c73448240b949e0580041c`) contains the ath3k library and
+only works because of the on-device rename (`/system/vendor/lib/libbt-vendor.ath3k.bak`, done
+through `mount -o remount,rw /system`); flashing `system_miui5_bt2.img` is what makes it
+reproducible. V5's bluedroid is still MIUI's 4.4.2 build against this port's 4.4.4 HAL — the
+`bt_vendor_interface_t`/`bt_vendor_callbacks_t` members line up and it demonstrably runs, but
+the warm-enable retry timing has only been exercised by hand so far.
+
+**Every sagit MIUI V5 boot still ships the *unpatched* DTBs (found 2026-10-29 while building
+the chiron V5 pair).** `scripts/patch-sagit-dtb.py` strips two properties, and both are present
+in this phone's stock-derived kernel: `qcom,mdss-idle-power-collapse-enabled` (a static UI
+vanishes until touched) and the boolean `qcom,wcn-btfm` on the tasha sound node (the card waits
+forever on the btfm slimbus dai and never registers). Measured on the DTB area of the V5 chain's
+tip, `boot-mi5-bt.img`: kernel member 15774877 B, gzip ends at 13372541, 2402336 B of appended
+DTBs holding 6× and 6× the two names — one per DTB, none stripped. The chain's root is
+`~/mi5-wifi/out/boot.img` (md5 `ee2234588c8b53c5bfe9ec55b6662b97`), split from the stock dump,
+and `repack-v5-boot.sh` keeps the kernel section byte-for-byte, so no later repack could have
+fixed it. The AOSP sagit kernel *is* patched (`vendor/xiaomi/sagit/kernel` = 15774349 B, 0× and
+0× after the run — the size difference is the whole 528 B), so `out/target/product/sagit/boot.img`
+(md5 `23859b4952499b127691ddb7fb7ab228`) carries the fixed DTBs while V5 never got them.
+Read `cat /proc/asound/cards` on the V5 image before concluding its audio HAL is at fault for
+silence: an empty list with the card nodes present is this DTB, not the HAL. To fix the pack,
+splice the patched sagit kernel into the V5 boot instead of the stock one (the header handling
+in `~/mi5-wifi/repack-v5-chiron-boot.sh` already does exactly that for chiron's blob) and keep
+the ramdisk bytes.
+
 ## MIUI V7 4.4.4 (`cancro`) pack deltas
 
 The side port in [miui-v7-kitkat.md](miui-v7-kitkat.md) is a plain

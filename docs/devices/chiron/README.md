@@ -238,7 +238,56 @@ that one file into the installed system was enough to boot.
 | Panel | 1080×1920, 480 dpi (`sagit` system.prop 440) | 1080×2160, 440 dpi |
 | ACDB | `Forte/Forte_*.acdb` | `ChironS/ChironS_*.acdb` + `Forte/*` + `adsp_avs_config.acdb` |
 | persist | WiFi MAC + TFA calibration | empty |
-| Kernel | patched stock `Image.gz-dtb` (`scripts/patch-sagit-dtb.py`) | stock `Image.gz-dtb` as-is |
+| Kernel | `Image.gz-dtb` patched with `scripts/patch-sagit-dtb.py` | same script, same two fixups — all three chiron DTBs carry both properties (measured 2026-10-29: 3× `qcom,mdss-idle-power-collapse-enabled`, 3× `qcom,wcn-btfm` in the staged blob, 0 after the run) |
+
+## MIUI V5 4.4.2 pack, ported from sagit (2026-10-29)
+
+The sagit MIUI V5 pair — the one that carries WiFi, the clock, the notification LED, the
+shared msm8998 RIL and the cherokee Bluetooth bring-up, all hardware-verified on the Mi 6 —
+converts to chiron in two steps, from scripts kept outside the repo like the other V5 packs
+(`/home/juezhi/mi5-wifi/`):
+
+```
+./repack-v5-chiron-boot.sh                        # sagit V5 boot -> chiron V5 boot
+mount -o loop system_miui5_bt.img /root/mi5-chiron
+./inject-v5-chiron.sh /root/mi5-chiron            # sagit V5 system -> chiron V5 system
+./verify-v5-chiron.sh                             # read-back over the mounted image
+```
+
+Nothing is re-derived from the V5 zip: the boot's ramdisk is copied **byte-for-byte** (gzip
+md5 `0b6b4fcb2933b7f25b89c6f0c446ec6f` in both phones' images, 343433 B), so every ramdisk
+fix — the `wf-*` WLAN stack, the LED sysfs chowns, `init.msm8998.ril.rc`, the
+`/dev/btpower` + `/dev/ttyHS0` ueventd rules, the global supplicant ctrl socket, `time-sync`/
+`rtc-restore` and the msm-power-supply-types `healthd` (md5 `65399232bc14a69852dd4b75defc6078`,
+so the charging indicator carries over too) — arrives already proven. sagit and chiron are the
+same SoC, the same WCN3990, the same modem and the same `androidboot.hardware=msm8998`, so only
+what the **DTB and the calibration blocks** differ over is touched. The whole delta, measured
+by `v5-chiron-delta.py` against `out/target/product/{sagit,chiron}/system` (everything else,
+including all eight BT patchram files and every WLAN ini value, is byte-identical):
+
+| what | change |
+| --- | --- |
+| boot image | one member changes: the `Image.gz-dtb` kernel — chiron's blob (`qcom,board-id <0x20 0x00>`, 3 DTBs) instead of sagit's (id `0x1e`, 6 DTBs) — and it is run through `patch-sagit-dtb.py` first. The header keeps the page-4096 layout, the 512-byte cmdline at offset 64 and the real ramdisk length at offset **16** (offset 12 is a 32768 stub); kernel 14594254 → 14593990 B |
+| system, audio | `lib/hw/audio.primary.msm8998.so` is the `-DAMP_TAS2559` build (asserted: contains `TAS2559 Mute`, not `TFA Profile`), `etc/mixer_paths_tasha.xml` + `etc/audio_policy.conf` are chiron's, `vendor/firmware/tfa98xx_*.cnt` are replaced by `tas2559_uCDSP.bin`/`tas2559_s_uCDSP.bin` |
+| system, calibration | `vendor/etc/acdbdata/Forte/*` is chiron's own set (the sagit blocks are not interchangeable — sizes differ by hundreds of KB) and the 8 `ChironS/*` blocks plus `adsp_avs_config.acdb` are added; assert is 8/8 and "the Forte blocks are still sagit's" fails the build |
+| system, UX | `build.prop`: `qemu.hw.mainkeys=0` (no capacitive keys, so the soft bar must be forced on) and the 12 `sys.haptic.*` patterns MIUI's `HapticFeedbackUtil` reads — unset it logs "vibrate: null or empty pattern" and never reaches the vibrator. Both blocks come from `~/miui5-chiron-pack.sh`, verified on this phone 2026-10-25 |
+| system, WLAN | `vendor/firmware/wlan/qca_cld/wlan_mac.bin` is **deleted**: it is sagit's factory address (`Intf0 50:8f:4c:e0:7e:64`, md5-identical to `vendor/xiaomi/sagit-fw/wlan/wlan_mac.bin`), and the driver reads it through `firmware_class.path=/vendor/firmware`, so the MIX 2 would associate with the Mi 6's MAC — two identical clients on one AP, one lease. `full_chiron.mk` ships no such file for the same reason and chiron WiFi was verified without it. `bdf_*.bin` stays (sagit's board data: chiron's `persist` is empty and no chiron dump supplied `bdwlan`). |
+
+Kept and re-checked, not merely hoped for: `libbt-vendor.so` (md5 `d4b8857d…`), `libhyb.so`,
+`lights.msm8998.so`, `gralloc.msm8998.so`, `libEGL_adreno.so`, `pdserve`/`wlq`/`rfssrv2`/
+`sm-vndk`/`linker64`, the RIL launcher + `qmxd`, the 8 patchram files, `ro.product.board=MSM8974`
+(the fallback key MIUI's `camera.msm8974.so`/`consumerir.msm8974.so` still resolve through),
+only `bt/` left under `/system/etc/firmware`, and 75 symlinks intact (proof the tree was packed
+on ext4, not extracted on Windows).
+
+Package `C:\download\chiron\chiron-v5-20261029\`: `boot-chiron-bt.img` 14942208 B md5
+`bcdb0049b40007b30b60647e1870554f`, `system_miui5_chiron.img` 1073741824 B md5
+`de99da7d924371a26f2b79d64c54c831`. Flash both to chiron together — the sagit DTB gives this
+board the wrong sound card and amp nodes, the sagit system gives the Mi 6's TFA9888 routes.
+
+Open on this board: speaker/headset/mic playback has never been verified on MIUI V5 (the audio
+set is now consistent with the chiron AOSP build, whose audio is itself playback-unverified),
+and the cellular stack inherited from sagit is still SIM-detection-open there.
 
 ## Building and flashing
 
@@ -283,7 +332,7 @@ here is committed.
 
 | What | Where it goes | How |
 | --- | --- | --- |
-| Stock 4.4 kernel (`Image.gz-dtb`) | `vendor/xiaomi/chiron/kernel` | extract from the stock `boot.img`; no DTB patch needed (chiron is `dtb_1` in the multi-DTB blob) |
+| Kernel (`Image.gz-dtb`, LOS 17.1 KernelSU) | `vendor/xiaomi/chiron/kernel` | the `lineage17.1_ksu`/`los17.1 -KernelSU` zip member (14594254 B, md5 `db252ba31495dceda3e6c6ebadd4ed9b`, `device.name1=chiron`), **then `scripts/patch-sagit-dtb.py` on it** — the "chiron is `dtb_1`, no patch needed" note in earlier revisions of this file was wrong: all 3 chiron DTBs carry both fixups (measured 2026-10-29), and the staged blob is still the unpatched one, so AOSP chiron boots built from it keep the dead-sound-card DTB. The V5 pack patches its copy instead (`~/mi5-wifi/repack-v5-chiron-boot.sh`, 14594254 → 14593990 B) |
 | TAS2559 firmware | `vendor/xiaomi/chiron-fw/audio/` | `tas2559_uCDSP.bin` + `tas2559_s_uCDSP.bin` from the stock ROM's audio firmware |
 | ACDB calibration | `vendor/xiaomi/chiron-hyb/acdbdata/` | copy `ChironS/`, `Forte/` and `adsp_avs_config.acdb` from the stock `/vendor/etc/acdbdata` |
 | Modem / ADSP / WLAN firmware | `vendor/xiaomi/sagit-fw/` (reused) | same MSM8998 blobs as sagit (`mba.mbn`, `modem.*`, `adsp.*`, `cpe_*`, `bdwlan*`); replace the WLAN board data with chiron's once a source is found |

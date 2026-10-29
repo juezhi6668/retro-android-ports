@@ -262,3 +262,19 @@ while the adapter is on, the process sits in `/dev/cpuctl/apps` whose
 - `/system` is re-mounted read-only at every boot — `mount -o remount,rw /system`
   immediately before each `adb push`.
 - BT auto-enables at `t≈30 s` and the stack retries the enable every ~3-6 s.
+
+## The same HAL on MIUI V5 (sagit, 2026-10-29: works)
+
+One binary serves both ROMs — V5's `libbt-hci.so` dlopens `libbt-vendor.so` and dlsyms
+`BLUETOOTH_VENDOR_LIB_INTERFACE`, which is exactly what this HAL exports, and MIUI's 4.4.2
+bluedroid drives the same `{size, init, op, cleanup}` interface. What V5 needed was three
+installs **plus one deletion**: the classic-BT feature XML (without it 4.4 Settings draws no
+toggle), `/system/etc/firmware/bt/image/`, `/system/lib/libbt-vendor.so` — and
+`/system/vendor/lib/libbt-vendor.so`, MIUI's own AR3012/ath3k bring-up, which the linker finds
+*first* and which silently owns the enable. The tell is that everything looks installed: the
+process runs, `bluetooth.hciattach=true` (only that old library sets it) and the framework logs
+`MESSAGE_ENABLE: mBluetooth = null` → `MESSAGE_TIMEOUT_BIND`. Read
+`/proc/$(pidof com.android.bluetooth)/maps` — if it lists the vendor path, the port's library
+was never mapped. After removing it, the same toggle reached `STATE_ON` with inquiry results
+following. Both the deletion and an "exactly one `libbt-vendor.so` in the tree" assert are now
+in `inject-v5-system.sh`; details in [quirks.md](quirks.md).
