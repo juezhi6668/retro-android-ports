@@ -503,7 +503,19 @@ bootclasspath changes are needed. What the packer has to know:
   in-tree `qmxd` QMUX bridge — but it has never come up: on AOSP rild dies inside
   its first `qmi_init` (no SIM, no registration). See the V5 RIL paragraph above
   and the chiron README's "Cellular control plane, 2026-10-28" section.
-- **Camera / GPS / BT / fingerprint.** Proprietary HALs, not started.
+- **Camera / GPS / fingerprint.** Proprietary HALs, not started.
+- **Bluetooth works.** The ported `libbt-vendor` brings WCN3990 ("cherokee") up
+  over the H4 UART and the adapter stays on through repeated off/on cycles —
+  verified on chiron hardware 2026-10-29. sagit runs the identical implementation
+  (`devices/sagit/kitkat/bt/`, one `.so` for both products) and has not been
+  re-run on a Mi 6. A warm enable finds the patch *still loaded* — it survives a
+  5.9 s power-off and an rfkill-driven rail drop — so the HAL asks a patched chip
+  first and skips the download; the full EDL path only runs after a real power
+  cycle. Kernel-side gotchas that invalidate most tests — no
+  `qca,bt-reset-gpio` anywhere (so only a power-off restores ROM mode), and
+  `/dev/btpower` power-on returning `-EINVAL` while tearing all six rails down —
+  are written up together with the three root causes in
+  [bluetooth.md](bluetooth.md).
 - **BT SCO audio.** The `qcom,wcn-btfm` property is stripped by
   `patch-sagit-dtb.py` so the card registers; SCO itself stays dead
   (maple TEST 36).

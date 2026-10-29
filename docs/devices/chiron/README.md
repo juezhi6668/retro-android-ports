@@ -39,7 +39,8 @@ MIUI V5 pack installs them under the ROM's own names
 | Touch | Synaptics DSX, `synaptics_dsx.idc` reused from sagit — confirm the device name with `getevent -p` |
 | USB | configfs gadget, UDC `a800000.dwc3` (same as sagit) |
 | Cellular | **Automatic startup failed after flashing, verified 2026-10-28**: `qmxd` is running/ready, but `ril-daemon` restarts, baseband is empty and SIM is `NOT_READY`. The shared native-launcher fix for KitKat init's duplicate library-path environment awaits automatic-start verification. Earlier **manual** QCRIL/QMUX testing read `AT20-0506_2249_2f010e6`, entered `Radio On` and received VOICE/DMS/NAS/UIM replies, but both UIM slots returned `card_state=2`, `card_error=3`, no apps. SIM detection, registration, calls, SMS and mobile data remain open. |
-| Camera / GPS / BT / fingerprint | Not started |
+| Bluetooth | **Works, verified on this device 2026-10-29** — five enables across 1–6 s gaps and one reboot all reached `ON` 36–91 ms after the port opened. The implementation is shared unchanged with sagit (`devices/sagit/kitkat/bt/`, staged to `vendor/xiaomi/sagit/bt`, installed to 32-bit `/system/lib/libbt-vendor.so`), same WCN3990, same `/dev/ttyHS0`, same `crbtfw21.tlv`/`crnv21.bin`; only the firmware staging directory is per-product (`$(CHIRON_FW)/bt/image`). Root cause of the failing tail was the HAL waiting out a 3 s EDL timeout on an already-patched chip — exactly bluedroid's `PRELOAD_START_TIMEOUT_MS` with zero retries. See [sagit bluetooth.md](../sagit/bluetooth.md) |
+| Camera / GPS / fingerprint | Not started |
 
 ### Cellular control plane, 2026-10-28
 

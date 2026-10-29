@@ -57,13 +57,18 @@ PRODUCT_COPY_FILES += \
     vendor/xiaomi/sagit/audio/audio_policy.conf:system/etc/audio_policy.conf \
     vendor/xiaomi/chiron/mixer_paths_tasha.xml:system/etc/mixer_paths_tasha.xml \
     vendor/xiaomi/sagit/media/media_codecs.xml:system/etc/media_codecs.xml \
-    frameworks/native/data/etc/android.hardware.wifi.xml:system/etc/permissions/android.hardware.wifi.xml
+    frameworks/native/data/etc/android.hardware.wifi.xml:system/etc/permissions/android.hardware.wifi.xml \
+    frameworks/native/data/etc/android.hardware.bluetooth.xml:system/etc/permissions/android.hardware.bluetooth.xml \
+    frameworks/native/data/etc/android.hardware.bluetooth_le.xml:system/etc/permissions/android.hardware.bluetooth_le.xml
 
 # audio.primary.msm8998 (shared tinyalsa HAL, -DAMP_TAS2559 for this product)
 # + sound recorder jni (same CHARQUIRKS reason as sagit).
+# libbt-vendor is the shared cherokee bring-up in vendor/xiaomi/sagit/bt:
+# WCN3990 on both boards, one implementation (see docs/devices/sagit).
 PRODUCT_PACKAGES += \
     audio.primary.msm8998 \
-    libsrec_jni
+    libsrec_jni \
+    libbt-vendor
 
 # Firmware. adsp/modem are the same msm8998 blobs as sagit (same baseband,
 # user-confirmed) and are staged out-of-git in vendor/xiaomi/sagit-fw; the
@@ -86,6 +91,15 @@ endif
 ifneq ($(wildcard $(SAGIT_FW)/modem/modem.mdt),)
 PRODUCT_COPY_FILES += \
     $(foreach f,$(shell cd $(SAGIT_FW)/modem && ls mba.mbn modem.mdt modem.b* wlanmdsp.mbn 2>/dev/null),$(SAGIT_FW)/modem/$(f):system/vendor/firmware/$(f))
+endif
+# Bluetooth patchram (WCN3990): crbtfw<NN>.tlv + crnv<NN>.bin, NN being the two
+# low nibbles of the ROM build the controller reports. libbt-vendor tries the
+# prefixes the stock QTI HAL searches and takes the pair that exists, so the
+# whole set ships. Same files as sagit (same WCN3990), staged in chiron-fw so a
+# board-specific set can replace them without touching the other product.
+ifneq ($(wildcard $(CHIRON_FW)/bt/image),)
+PRODUCT_COPY_FILES += \
+    $(foreach f,$(shell cd $(CHIRON_FW)/bt/image && ls *.tlv *.bin 2>/dev/null),$(CHIRON_FW)/bt/image/$(f):system/etc/firmware/bt/image/$(f))
 endif
 # The modem fetches the WLAN firmware image over RFS with the path
 # "readonly/firmware/image/wlanmdsp.mbn", which rfssrv2 maps to

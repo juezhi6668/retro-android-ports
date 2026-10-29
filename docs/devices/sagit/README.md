@@ -56,7 +56,8 @@ also moves the vibrator off the Mi 3 Immersion engine). Write-up:
 | Storage | internal emulated only (no microSD); no `/vendor` partition on the stock layout — the hybrid root lives at `/system/a15` |
 | Lights | `lcd-backlight` (no `/sys/class/backlight`) + `wled`, notification `white` LED with `blink` — all measured |
 | Cellular | Shared msm8998 QMUX bridge and matched 32-bit QCRIL stack with chiron (`devices/sagit/kitkat/ril/`); both AOSP products use the same source, staging and init configuration. Baseband query + Radio On were verified on **chiron only**, manually launched 2026-10-28; the subsequent flashed chiron image restarts RIL. Both products now use a native launcher to replace KitKat init's ineffective library-path `setenv` without losing the hyphenated debug-socket variable in mksh; automatic startup remains unverified. SIM errors and all cellular services remain open. Not hardware-verified on sagit. See [chiron control-plane notes](../chiron/README.md#cellular-control-plane-2026-10-28). |
-| Camera / GPS / BT / fingerprint | Not started |
+| Bluetooth | WCN3990 ("cherokee") bring-up is entirely userspace, because the booted kernel only supplies power: `devices/sagit/kitkat/bt/libbt-vendor` builds `libbt-vendor` (shared unchanged with chiron) and drives EDL → 3 Mbaud → rampatch + NVM TLV → HCI Reset over `/dev/ttyHS0`, while `ueventd.msm8998.rc` gives `/dev/btpower` + `/dev/ttyHS0` to `bluetooth:net_bt 0660` and `full_sagit.mk` installs `crbtfw21.tlv`/`crnv21.bin` to `/system/etc/firmware/bt/image`. Adapter turns ON and survives repeated off/on cycles — hardware-verified 2026-10-29, on chiron. No `qca,bt-reset-gpio` exists in any msm8998 DTS, so nothing but a real power-off returns the chip to ROM mode; see [bluetooth.md](bluetooth.md) |
+| Camera / GPS / fingerprint | Not started |
 
 Open work and the Mi-6-vs-maple deltas are tracked in
 [quirks.md](quirks.md).

@@ -26,3 +26,12 @@
 # the board's acdb blocks into the kernel where q6asm/q6afe look them up.
 # Created root:root 0600 by the driver — without this, playback stays silent.
 /dev/msm_audio_cal       0660   media      audio
+
+# Bluetooth (WCN3990 / cherokee): libbt-vendor powers the chip through
+# /dev/btpower and runs the whole EDL patchram download over /dev/ttyHS0
+# (uart@c171000, the only HS port; there is no kernel HCI transport, so no
+# /dev/hci* node). Both are created root:root 0600 by msm_serial_hs/btpower,
+# which is why the stack's first power-on just failed to open them. Ownership
+# copied from the stock chiron vendor/etc/ueventd.rc.
+/dev/btpower             0660   bluetooth  net_bt
+/dev/ttyHS0              0660   bluetooth  net_bt

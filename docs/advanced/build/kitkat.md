@@ -144,6 +144,20 @@ Rebuild the images after re-staging, and re-stage after changing any
 device-tree graphics source — see the staging rules in
 [libhyb](../software/libhyb.md#building-and-staging).
 
+For the msm8998 vendor HALs a full image is not needed while iterating: rebuild
+the single module in the container and push its `.so` (this is the loop used for
+`libbt-vendor`, see [sagit bluetooth.md](../../devices/sagit/bluetooth.md)).
+`docker` needs the socket owner's rights, so run it through `sudo -S` from the
+Windows shell with `MSYS_NO_PATHCONV=1` set, sync the device tree first
+(`AOSP_DIR=… scripts/sync-device-tree.sh sagit`), then
+
+```sh
+make libbt-vendor -j8            # in the container, after lunch full_sagit-eng
+```
+
+and `adb shell mount -o remount,rw /system` immediately before every push —
+`/system` comes back read-only at each boot.
+
 ## 7. Flash and verify
 
 Phone in TWRP, adb up. Push to `/data/media` (not `/sdcard`), never pipe

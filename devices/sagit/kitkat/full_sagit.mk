@@ -58,7 +58,9 @@ PRODUCT_COPY_FILES += \
     vendor/xiaomi/sagit/audio/audio_policy.conf:system/etc/audio_policy.conf \
     vendor/xiaomi/sagit/audio/mixer_paths_tasha.xml:system/etc/mixer_paths_tasha.xml \
     vendor/xiaomi/sagit/media/media_codecs.xml:system/etc/media_codecs.xml \
-    frameworks/native/data/etc/android.hardware.wifi.xml:system/etc/permissions/android.hardware.wifi.xml
+    frameworks/native/data/etc/android.hardware.wifi.xml:system/etc/permissions/android.hardware.wifi.xml \
+    frameworks/native/data/etc/android.hardware.bluetooth.xml:system/etc/permissions/android.hardware.bluetooth.xml \
+    frameworks/native/data/etc/android.hardware.bluetooth_le.xml:system/etc/permissions/android.hardware.bluetooth_le.xml
 
 # audio.primary.msm8998 (tinyalsa HAL) + sound recorder jni (CHARQUIRKS:
 # "sound recorder needs libsrec_jni in PRODUCT_PACKAGES or it crashes").
@@ -67,7 +69,8 @@ PRODUCT_COPY_FILES += \
 # every compressed format fails with UNKNOWN_ERROR (maple TEST 52).
 PRODUCT_PACKAGES += \
     audio.primary.msm8998 \
-    libsrec_jni
+    libsrec_jni \
+    libbt-vendor
 
 # Firmware blobs live out-of-git at vendor/xiaomi/sagit-fw/{adsp,wlan,modem,audio}/
 # (pulled from the modem partition + persist + stock ROM; mirrors the kernel-blob
@@ -92,6 +95,18 @@ endif
 ifneq ($(wildcard $(FW_DIR)/modem/modem.mdt),)
 PRODUCT_COPY_FILES += \
     $(foreach f,$(shell cd $(FW_DIR)/modem && ls mba.mbn modem.mdt modem.b* wlanmdsp.mbn 2>/dev/null),$(FW_DIR)/modem/$(f):system/vendor/firmware/$(f))
+endif
+
+# Bluetooth (WCN3990 / cherokee): the patchram pair, named after the ROM build
+# the controller reports -- crbtfw<NN>.tlv + crnv<NN>.bin where NN is the two
+# low nibbles of the 16-bit build version (0x0201 -> 21). libbt-vendor picks
+# the pair by trying the prefixes the stock QTI HAL searches
+# (rome_set_cherokee_fw_paths), so the whole set ships rather than a guess;
+# sagit and chiron carry the same WCN3990 files. The path mirrors the stock
+# /bt_firmware/image layout, which KitKat has no vendor partition for.
+ifneq ($(wildcard $(FW_DIR)/bt/image),)
+PRODUCT_COPY_FILES += \
+    $(foreach f,$(shell cd $(FW_DIR)/bt/image && ls *.tlv *.bin 2>/dev/null),$(FW_DIR)/bt/image/$(f):system/etc/firmware/bt/image/$(f))
 endif
 
 # WLAN board data where cnss-daemon actually looks (chiron bring-up proved
